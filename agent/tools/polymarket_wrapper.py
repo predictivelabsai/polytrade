@@ -107,60 +107,6 @@ class PolymarketWrapper:
         opportunities.sort(key=lambda x: x["edge"], reverse=True)
         return opportunities
 
-    async def simulate_polymarket_trade(self, amount: float, market_id: str) -> Dict[str, Any]:
-        """
-        Simulate a trade by walking the CLOB order book.
-        Args:
-            amount: Amount in USDC to spend
-            market_id: The market ID (CLOB token ID)
-        """
-        logger.info(f"Simulating trade: {amount} USDC on {market_id}")
-        
-        clob_book = await self.clob.get_order_book(market_id)
-        if not clob_book:
-            return {"error": f"Could not fetch order book for {market_id}"}
-        
-        # Walk the book (Asks for BUY)
-        remaining_amount = amount
-        total_shares = 0
-        executed_value = 0
-        
-        for ask in clob_book.asks:
-            price = ask["price"]
-            size = ask["size"]
-            
-            available_value = price * size
-            if remaining_amount <= available_value:
-                shares = remaining_amount / price
-                total_shares += shares
-                executed_value += remaining_amount
-                remaining_amount = 0
-                break
-            else:
-                total_shares += size
-                executed_value += available_value
-                remaining_amount -= available_value
-        
-        if remaining_amount > 0:
-            # Book was too thin
-            slippage_warning = True
-        else:
-            slippage_warning = False
-            
-        vwap = executed_value / total_shares if total_shares > 0 else 0
-        slippage = (vwap - clob_book.best_ask) / clob_book.best_ask if clob_book.best_ask > 0 else 0
-        
-        return {
-            "market_id": market_id,
-            "amount_requested": amount,
-            "amount_executed": executed_value - remaining_amount,
-            "shares_bought": total_shares,
-            "vwap": vwap,
-            "best_ask": clob_book.best_ask,
-            "slippage": slippage,
-            "slippage_warning": slippage_warning,
-            "insufficient_liquidity": remaining_amount > 0
-        }
 
     def _extract_city(self, question: str) -> Optional[str]:
         cities = ["London", "New York", "Seoul", "Tokyo", "Paris", "Singapore", "Hong Kong", "Dubai"]

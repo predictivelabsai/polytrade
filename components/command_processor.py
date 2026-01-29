@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import asyncio
+import re
 from typing import Optional, Dict, Any, List, Tuple
 from rich.console import Console
 from rich.table import Table
@@ -103,64 +105,28 @@ class CommandProcessor:
                 effective_cmd = cmd
                 effective_args = args
 
-            # Handle poly:backtest
-            if effective_cmd == "poly:backtest":
-                if not effective_args:
-                    self.console.print("[red]Error: Usage: poly:backtest <city> <numdays>[/red]")
-                    self.console.print("Example: poly:backtest Seoul 1")
-                    return True, None
-                
-                # Parse arguments: Handle multi-word cities, numdays, and optional DATE
-                # Format: poly:backtest <city> [numdays] [date]
-                
-                from datetime import datetime
-                numdays = 7  # Default
-                target_date = datetime.now().strftime("%Y-%m-%d")
-                
-                # Copy args to consume
-                args_to_parse = effective_args.copy()
-                
-                # 1. Check for Date at the end (YYYY-MM-DD)
-                if args_to_parse and len(args_to_parse[-1]) == 10 and args_to_parse[-1].count('-') == 2:
-                    target_date = args_to_parse.pop()
-                    
-                # 2. Check for NumDays at the end (after date removed)
-                if args_to_parse and args_to_parse[-1].isdigit():
-                    numdays = int(args_to_parse.pop())
-                
-                # 3. Remaining is City
-                if not args_to_parse:
-                     self.console.print("[red]Error: City name is required.[/red]")
-                     return True, None
-                     
-                raw_city = " ".join(args_to_parse).replace('"', '').replace("'", "")
-                
-                # Handle standard casing unless it's an acronym
-                if raw_city.upper() in ["NYC", "LA", "DC", "SF", "NYC."]:
-                    city = raw_city.upper()
-                else:
-                    city = raw_city.title()
-                
-                self.console.print(f"[bold cyan]Running Cross-Sectional Backtest for {city} on {target_date} for {numdays} days...[/bold cyan]")
-                
-                # Run backtest
-                await self._run_backtest_handler(city, target_date, numdays)
-                return True, None
 
-            # Handle poly:weather (with fuzzy matching for typos like 'weathter')
-            elif effective_cmd == "poly:portfolio":
-                 if not self._pm_client_cache:
-                     from agent.tools.polymarket_tool import get_polymarket_client
-                     self._pm_client_cache = await get_polymarket_client()
-                 self.pm_client = self._pm_client_cache
- 
-                 self.console.print("[bold yellow]Fetching On-Chain Portfolio...[/bold yellow]")
-                 data = await self.pm_client.get_portfolio()
+            # Handle poly:portfolio
+            if effective_cmd == "poly:portfolio":
+                 mode = "real"
+                 if effective_args and effective_args[0].lower() == "paper":
+                     mode = "paper"
                  
-                 if "error" in data:
-                     self.console.print(f"[bold red]Error:[/bold red] {data['error']}")
+                 if mode == "real":
+                     if not self._pm_client_cache:
+                         from agent.tools.polymarket_tool import get_polymarket_client
+                         self._pm_client_cache = await get_polymarket_client()
+                     self.pm_client = self._pm_client_cache
+    
+                     self.console.print("[bold yellow]Fetching On-Chain Portfolio...[/bold yellow]")
+                     data = await self.pm_client.get_portfolio()
+                     
+                     if "error" in data:
+                         self.console.print(f"[bold red]Error:[/bold red] {data['error']}")
+                     else:
+                         await self._display_real_portfolio(data)
                  else:
-                     await self._display_real_portfolio(data)
+                     await self._display_portfolio() # Paper portfolio display
                  
                  return True, None
 
@@ -193,10 +159,41 @@ class CommandProcessor:
 
             elif effective_cmd == "poly:predict":
                 if not effective_args:
-                    self.console.print("[red]Error: Usage: poly:predict <city> <numdays>[/red]")
+                    self.console.print("[red]Error: Usage: poly:predict (city) (numdays) or poly:predict earnings (ticker) (days) (lookback)[/red]")
                     self.console.print("Example: poly:predict London 2")
+                    self.console.print("Example: poly:predict earnings MSFT 2 2y")
                     return True, None
                 
+                # Check for earnings (positional or key:value)
+                first_arg = effective_args[0].lower()
+                if first_arg in ["earnings", "market:earnings"]:
+                    # Positional check: poly:predict earnings MSFT 2 2y
+                    if len(effective_args) >= 2 and ":" not in effective_args[1] and first_arg == "earnings":
+                        ticker = effective_args[1].upper()
+                        days = int(effective_args[2]) if len(effective_args) > 2 else 2
+                        lookback = effective_args[3] if len(effective_args) > 3 else "2y"
+                        await self._handle_poly_predict_earnings(ticker, days, lookback)
+                        return True, None
+                    
+                    # Key:Value style: poly:predict market:earnings ticker:MSFT days:2
+                    arg_dict = {}
+                    for a in effective_args:
+                        if ":" in a:
+                            k, v = a.split(":", 1)
+                            arg_dict[k.lower()] = v.upper() if k.lower() == "ticker" else v
+                    
+                    ticker = arg_dict.get("ticker", self.current_ticker)
+                    if not ticker:
+                        self.console.print("[red]Error: Specify ticker:<symbol> or use positional: poly:predict earning <ticker>[/red]")
+                        return True, None
+                        
+                    days = int(arg_dict.get("days", "2"))
+                    lookback = arg_dict.get("lookback", "2y")
+                    
+                    await self._handle_poly_predict_earnings(ticker, days, lookback)
+                    return True, None
+
+                # Default to weather prediction
                 city = effective_args[0].title()
                 try:
                     numdays = int(effective_args[1]) if len(effective_args) > 1 else 2
@@ -214,184 +211,188 @@ class CommandProcessor:
                 await self._run_backtest_handler(city, target_date, numdays, is_prediction=True)
                 return True, None
 
-            elif effective_cmd == "poly:backtestv2" or effective_cmd == "poly:backtest2":
+            elif effective_cmd == "poly:backtest" or effective_cmd == "poly:backtest2":
                 if not effective_args:
-                    self.console.print("[red]Error: Usage: poly:backtestv2 <city> <numdays>[/red]")
+                    self.console.print("[red]Error: Usage: poly:backtest (city) (numdays)[/red]")
                     return True, None
                 
-                city = effective_args[0].title()
-                try:
-                    numdays = int(effective_args[1]) if len(effective_args) > 1 else 7
-                except ValueError:
-                    numdays = 7
-                
+                # Parse arguments: Handle multi-word cities and numdays
                 from datetime import datetime
+                numdays = 7  # Default
+                args_to_parse = effective_args.copy()
+                
+                if args_to_parse and args_to_parse[-1].isdigit():
+                    numdays = int(args_to_parse.pop())
+                
+                if not args_to_parse:
+                    self.console.print("[red]Error: City name is required.[/red]")
+                    return True, None
+                    
+                city_raw = " ".join(args_to_parse).replace('"', '').replace("'", "")
+                city = city_raw.title() if city_raw.upper() not in ["NYC", "LA", "DC", "SF"] else city_raw.upper()
+                
                 today = datetime.now().strftime("%Y-%m-%d")
-                self.console.print(f"[bold cyan]Running Cross-Sectional Backtest V2 for {city} ({numdays} days)...[/bold cyan]")
+                self.console.print(f"[bold cyan]Running Cross-Sectional Backtest for {city} ({numdays} days)...[/bold cyan]")
                 await self._run_backtest_handler(city, today, numdays, v2_mode=True)
                 return True, None
 
             elif effective_cmd == "poly:buy":
-                if len(effective_args) < 2:
-                    self.console.print("[red]Error: Usage: poly:buy <amount> <market_id>[/red]")
-                    return True, None
-                
-                amount = float(effective_args[0])
-                market_id = effective_args[1]
-                
-                self.console.print(f"[bold green]Executing REAL Buy: ${amount:.2f} on {market_id}...[/bold green]")
-                
-                if not self._pm_client_cache:
-                    from agent.tools.polymarket_tool import get_polymarket_client
-                    self._pm_client_cache = await get_polymarket_client()
-                
-                # Check if this is a Gamma ID (short) or Token ID (long)
-                token_id = market_id
-                if len(market_id) < 20: 
-                    # Likely a Gamma ID, resolve it
-                    self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID...[/dim]")
-                    market = await self._pm_client_cache.get_market_by_id(market_id)
-                    if not market or not market.clob_token_ids:
-                        self.console.print(f"[bold red]Error:[/bold red] Could not resolve market ID {market_id} to tokens.")
-                        return True, None
-                    token_id = market.clob_token_ids[0] # Use YES token
-                    self.console.print(f"[dim]Resolved to YES Token: {token_id[:10]}...[/dim]")
+                # Check for mode
+                mode = "paper" # Default
+                args_to_use = effective_args
+                if effective_args and effective_args[0].lower() in ["paper", "real"]:
+                    mode = effective_args[0].lower()
+                    args_to_use = effective_args[1:]
 
-                result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id)
-                self._display_data("Real Trade Execution", result)
-                return True, None
-
-            elif effective_cmd == "poly:sell":
-                if len(effective_args) < 2:
-                    self.console.print("[red]Error: Usage: poly:sell <amount> <market_id>[/red]")
-                    return True, None
-                
-                amount = float(effective_args[0])
-                market_id = effective_args[1]
-                
-                self.console.print(f"[bold red]Executing REAL Sell: {amount} shares on {market_id}...[/bold red]")
-                
-                if not self._pm_client_cache:
-                    from agent.tools.polymarket_tool import get_polymarket_client
-                    self._pm_client_cache = await get_polymarket_client()
-                
-                # Check if this is a Gamma ID (short) or Token ID (long)
-                token_id = market_id
-                if len(market_id) < 20: 
-                    # Likely a Gamma ID, resolve it
-                    self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID...[/dim]")
-                    market = await self._pm_client_cache.get_market_by_id(market_id)
-                    if not market or not market.clob_token_ids:
-                        self.console.print(f"[bold red]Error:[/bold red] Could not resolve market ID {market_id} to tokens.")
-                        return True, None
-                    token_id = market.clob_token_ids[0] # Use YES token
-                    self.console.print(f"[dim]Resolved to YES Token: {token_id[:10]}...[/dim]")
-
-                result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id, side="SELL")
-                self._display_data("Real Trade Execution (SELL)", result)
-                return True, None
-
-            elif effective_cmd == "poly:simbuy":
-                if len(effective_args) < 2:
-                    self.console.print("[red]Error: Usage: poly:simbuy <amount> <market_id>[/red]")
-                    return True, None
-                amount = effective_args[0]
-                market_id = effective_args[1]
-                self.console.print(f"[bold cyan]Simulating Buy: {amount} on {market_id}[/bold cyan]")
-                result = await self._exec_tool("simulate_polymarket_trade", amount=amount, market_id=market_id)
-                self._display_data("Trade Simulation", result)
-                return True, None
-
-            elif effective_cmd == "poly:paperbuy":
-                if len(effective_args) < 2:
-                    self.console.print("[red]Error: Usage: poly:paperbuy <amount> <market_id>[/red]")
+                if len(args_to_use) < 2:
+                    self.console.print(f"[red]Error: Usage: poly:buy (paper/real) (amount) (market_id)[/red]")
                     return True, None
                 
                 try:
-                    amount = float(effective_args[0])
-                    market_id = effective_args[1]
+                    amount = float(args_to_use[0])
+                    market_id = args_to_use[1]
                 except ValueError:
                     self.console.print("[red]Error: Amount must be a number.[/red]")
                     return True, None
-                
-                self.console.print(f"Fetching current price for [yellow]{market_id}[/yellow]...")
-                if not self._pm_client_cache:
-                    from agent.tools.polymarket_tool import get_polymarket_client
-                    self._pm_client_cache = await get_polymarket_client()
-                
-                market = await self._pm_client_cache.get_market_by_id(market_id)
-                
-                if not market:
-                    self.console.print(f"[red]Error: Could not find market {market_id}[/red]")
-                    return True, None
-                
-                # Market is a PolymarketMarket object
-                price = market.yes_price
-                if price <= 0:
-                    self.console.print("[red]Error: Market has no valid price.[/red]")
-                    return True, None
-                
-                trade = self.portfolio.add_trade(market_id, market.question, amount, price)
-                self.console.print(Panel(
-                    f"Market: {market.question}\nEntry Price: [bold]${price:.3f}[/bold]\nAmount: [green]${amount:.2f}[/green]\nShares: [cyan]{trade['shares']:.2f}[/cyan]",
-                    title="[bold green]Paper Trade Executed[/bold green]",
-                    border_style="green"
-                ))
-                return True, None
 
-            elif effective_cmd == "poly:papersell":
-                if len(effective_args) < 1:
-                    self.console.print("[red]Error: Usage: poly:papersell <transaction_id>[/red]")
-                    return True, None
-                
-                trade_id = effective_args[0]
-                
-                # Check if trade exists and is open
-                trades = self.portfolio.get_trades()
-                target_trade = None
-                for t in trades:
-                    if t["id"] == trade_id or t["id"].endswith(trade_id):
-                        if t["status"] == "OPEN":
-                            target_trade = t
-                            break
-                        else:
-                            self.console.print(f"[yellow]Trade {trade_id} is already SOLD.[/yellow]")
-                            return True, None
-                
-                if not target_trade:
-                    self.console.print(f"[red]Error: Open trade with ID {trade_id} not found.[/red]")
-                    return True, None
-                
-                self.console.print(f"Closing trade {trade_id} at current market price...")
-                if not self._pm_client_cache:
-                    from agent.tools.polymarket_tool import get_polymarket_client
-                    self._pm_client_cache = await get_polymarket_client()
-                
-                market = await self._pm_client_cache.get_market_by_id(target_trade["market_id"])
-                if not market:
-                    self.console.print("[red]Error: Could not fetch current market price to close trade.[/red]")
-                    return True, None
-                
-                exit_price = market.yes_price
-                closed_trade = self.portfolio.close_trade_by_id(trade_id, exit_price)
-                
-                if closed_trade:
-                    pnl = closed_trade["payout"] - closed_trade["amount"]
-                    pnl_perc = (pnl / closed_trade["amount"] * 100) if closed_trade["amount"] > 0 else 0
-                    pnl_color = "green" if pnl >= 0 else "red"
+                if mode == "real":
+                    self.console.print(f"[bold green]Executing REAL Buy: ${amount:.2f} on {market_id}...[/bold green]")
                     
+                    if not self._pm_client_cache:
+                        from agent.tools.polymarket_tool import get_polymarket_client
+                        self._pm_client_cache = await get_polymarket_client()
+                    
+                    # Check if this is a Gamma ID (short) or Token ID (long)
+                    token_id = market_id
+                    if len(market_id) < 20: 
+                        # Likely a Gamma ID, resolve it
+                        self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID...[/dim]")
+                        market = await self._pm_client_cache.get_market_by_id(market_id)
+                        if not market or not market.clob_token_ids:
+                            self.console.print(f"[bold red]Error:[/bold red] Could not resolve market ID {market_id} to tokens.")
+                            return True, None
+                        token_id = market.clob_token_ids[0] # Use YES token
+                        self.console.print(f"[dim]Resolved to YES Token: {token_id[:10]}...[/dim]")
+
+                    result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id)
+                    self._display_data("Real Trade Execution", result)
+                else:
+                    # Paper buy
+                    self.console.print(f"Fetching current price for [yellow]{market_id}[/yellow]...")
+                    if not self._pm_client_cache:
+                        from agent.tools.polymarket_tool import get_polymarket_client
+                        self._pm_client_cache = await get_polymarket_client()
+                    
+                    market = await self._pm_client_cache.get_market_by_id(market_id)
+                    
+                    if not market:
+                        self.console.print(f"[red]Error: Could not find market {market_id}[/red]")
+                        return True, None
+                    
+                    # Market is a PolymarketMarket object
+                    price = market.yes_price
+                    if price <= 0:
+                        self.console.print("[red]Error: Market has no valid price.[/red]")
+                        return True, None
+                    
+                    trade = self.portfolio.add_trade(market_id, market.question, amount, price)
                     self.console.print(Panel(
-                        f"Market: {closed_trade['question']}\n"
-                        f"Exit Price: [bold]${exit_price:.3f}[/bold]\n"
-                        f"Payout: [green]${closed_trade['payout']:.2f}[/green]\n"
-                        f"PnL: [{pnl_color}]${pnl:+.2f} ({pnl_perc:+.2f}%)[/{pnl_color}]",
-                        title="[bold yellow]Paper Trade SOLD[/bold yellow]",
-                        border_style="yellow"
+                        f"Market: {market.question}\nEntry Price: [bold]${price:.3f}[/bold]\nAmount: [green]${amount:.2f}[/green]\nShares: [cyan]{trade['shares']:.2f}[/cyan]",
+                        title="[bold green]Paper Trade Executed[/bold green]",
+                        border_style="green"
                     ))
                 return True, None
 
-            elif effective_cmd == "poly:paperportfolio":
-                await self._display_portfolio()
+            elif effective_cmd == "poly:sell":
+                # Check for mode
+                mode = "paper" # Default
+                args_to_use = effective_args
+                if effective_args and effective_args[0].lower() in ["paper", "real"]:
+                    mode = effective_args[0].lower()
+                    args_to_use = effective_args[1:]
+
+                if len(args_to_use) < 1:
+                    self.console.print(f"[red]Error: Usage: poly:sell (paper/real) (id/amount) (market_id)[/red]")
+                    return True, None
+
+                if mode == "real":
+                    if len(args_to_use) < 2:
+                        self.console.print("[red]Error: Usage: poly:sell real <amount> <market_id>[/red]")
+                        return True, None
+                    
+                    try:
+                        amount = float(args_to_use[0])
+                        market_id = args_to_use[1]
+                    except ValueError:
+                        self.console.print("[red]Error: Amount must be a number.[/red]")
+                        return True, None
+                    
+                    self.console.print(f"[bold red]Executing REAL Sell: {amount} shares on {market_id}...[/bold red]")
+                    
+                    if not self._pm_client_cache:
+                        from agent.tools.polymarket_tool import get_polymarket_client
+                        self._pm_client_cache = await get_polymarket_client()
+                    
+                    # Check if this is a Gamma ID (short) or Token ID (long)
+                    token_id = market_id
+                    if len(market_id) < 20: 
+                        # Likely a Gamma ID, resolve it
+                        self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID...[/dim]")
+                        market = await self._pm_client_cache.get_market_by_id(market_id)
+                        if not market or not market.clob_token_ids:
+                            self.console.print(f"[bold red]Error:[/bold red] Could not resolve market ID {market_id} to tokens.")
+                            return True, None
+                        token_id = market.clob_token_ids[0] # Use YES token
+                        self.console.print(f"[dim]Resolved to YES Token: {token_id[:10]}...[/dim]")
+
+                    result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id, side="SELL")
+                    self._display_data("Real Trade Execution (SELL)", result)
+                else:
+                    # Paper sell
+                    trade_id = args_to_use[0]
+                    
+                    # Check if trade exists and is open
+                    trades = self.portfolio.get_trades()
+                    target_trade = None
+                    for t in trades:
+                        if t["id"] == trade_id or t["id"].endswith(trade_id):
+                            if t["status"] == "OPEN":
+                                target_trade = t
+                                break
+                            else:
+                                self.console.print(f"[yellow]Trade {trade_id} is already SOLD.[/yellow]")
+                                return True, None
+                    
+                    if not target_trade:
+                        self.console.print(f"[red]Error: Open trade with ID {trade_id} not found.[/red]")
+                        return True, None
+                    
+                    self.console.print(f"Closing trade {trade_id} at current market price...")
+                    if not self._pm_client_cache:
+                        from agent.tools.polymarket_tool import get_polymarket_client
+                        self._pm_client_cache = await get_polymarket_client()
+                    
+                    market = await self._pm_client_cache.get_market_by_id(target_trade["market_id"])
+                    if not market:
+                        self.console.print("[red]Error: Could not fetch current market price to close trade.[/red]")
+                        return True, None
+                    
+                    exit_price = market.yes_price
+                    closed_trade = self.portfolio.close_trade_by_id(trade_id, exit_price)
+                    
+                    if closed_trade:
+                        pnl = closed_trade["payout"] - closed_trade["amount"]
+                        pnl_perc = (pnl / closed_trade["amount"] * 100) if closed_trade["amount"] > 0 else 0
+                        pnl_color = "green" if pnl >= 0 else "red"
+                        
+                        self.console.print(Panel(
+                            f"Market: {closed_trade['question']}\n"
+                            f"Exit Price: [bold]${exit_price:.3f}[/bold]\n"
+                            f"Payout: [green]${closed_trade['payout']:.2f}[/green]\n"
+                            f"PnL: [{pnl_color}]${pnl:+.2f} ({pnl_perc:+.2f}%)[/{pnl_color}]",
+                            title="[bold yellow]Paper Trade SOLD[/bold yellow]",
+                            border_style="yellow"
+                        ))
                 return True, None
             
             else:
@@ -532,7 +533,7 @@ class CommandProcessor:
                     table.add_row(key.replace("_", " ").title(), f"{display_val} {unit}")
             
             self.console.print(table)
-            self.console.print(f"Source: Massive (Polygon)")
+            self.console.print(f"Source: Massive")
             return
 
         pretty_json = json.dumps(data, indent=2)
@@ -723,13 +724,13 @@ class CommandProcessor:
                 title = f"Market Prediction '{result['city']}'" if is_prediction else f"Market Backtest '{result['city']}'"
                 self.console.print(f"\n[bold green]{title}[/bold green]")
                 
-                trade_table = Table(show_header=True, header_style="bold cyan", expand=True)
+                trade_table = Table(show_header=True, header_style="bold cyan")
                 trade_table.add_column("Date", style="dim", width=7)
-                trade_table.add_column("Target", justify="center", ratio=3)
-                trade_table.add_column("VC-Fcst", justify="center", style="magenta", width=7)
+                trade_table.add_column("Target", justify="center")
+                trade_table.add_column("VC-Fcst", justify="center", style="magenta", no_wrap=True)
                 if is_prediction:
-                    trade_table.add_column("TM-Fcst", justify="center", style="dim magenta", width=7)
-                trade_table.add_column("Actual", justify="center", style="blue")
+                    trade_table.add_column("TM-Fcst", justify="center", style="dim magenta", no_wrap=True)
+                trade_table.add_column("Actual", justify="center", style="blue", no_wrap=True)
                 if is_prediction or v2_mode:
                     trade_table.add_column("ID", style="cyan", width=8)
                 if v2_mode:
@@ -750,15 +751,23 @@ class CommandProcessor:
                     except:
                         date_display = t["date"]
 
+                    def fmt_temp(f_val):
+                        if f_val == "N/A" or f_val is None: return "N/A"
+                        try:
+                            f = float(f_val)
+                            c = (f - 32) * 5/9
+                            return f"{c:.1f}°C ({f:.1f}°F)"
+                        except: return str(f_val)
+
                     row_data = [
                         date_display,
                         t.get("target_display", f"{t['bucket']} ({t['target_f']}°F)"),
-                        f"{t['forecast']}°F",
+                        fmt_temp(t.get('forecast')),
                     ]
                     if is_prediction:
-                        row_data.append(f"{t.get('forecast_secondary', 'N/A')}°F")
+                        row_data.append(fmt_temp(t.get('forecast_secondary')))
                     
-                    row_data.append(t.get("actual", "N/A"))
+                    row_data.append(fmt_temp(t.get('actual')))
                     
                     if is_prediction or v2_mode:
                         row_data.append(str(t.get("market_id", "N/A")))
@@ -798,6 +807,7 @@ class CommandProcessor:
             
             stats.add_row("Initial Bankroll", "$1000.00")
             stats.add_row("Completed Investments", f"${result['resolved_invested']:.2f}")
+            stats.add_row("Max Drawdown", f"{result.get('max_drawdown', 0.0):.1f}%")
             stats.add_row("Total Payouts", f"${result['resolved_payout']:.2f}")
             
             pnl_color = "green" if result['resolved_roi'] >= 0 else "red"
@@ -824,7 +834,7 @@ class CommandProcessor:
         """Display the current paper trading portfolio performance."""
         trades = self.portfolio.get_trades()
         if not trades:
-            self.console.print("[yellow]Your portfolio is empty. Use poly:paperbuy to start trading![/yellow]")
+            self.console.print("[yellow]Your portfolio is empty. Use poly:buy to start trading![/yellow]")
             return
 
         table = Table(title="Paper Trading Portfolio", header_style="bold magenta")
@@ -894,27 +904,375 @@ class CommandProcessor:
         
         self.console.print(Panel(summary, title="[bold]Portfolio Summary[/bold]", border_style="cyan"))
 
+    async def _handle_poly_predict_earnings(self, ticker_symbol: str, days: int, lookback: str):
+        """Handle the poly:predict market:earnings command."""
+        from datetime import datetime, timedelta
+        import yfinance as yf
+        import re
+        import asyncio
+
+        yftictker = yf.Ticker(ticker_symbol)
+
+        self.console.print(f"[bold cyan]Analyzing Earnings Predictability for {ticker_symbol}...[/bold cyan]")
+        
+        # 1. Fetch Polymarket YES price
+        if not self._pm_client_cache:
+            from agent.tools.polymarket_tool import get_polymarket_client
+            self._pm_client_cache = await get_polymarket_client()
+        
+        with self.console.status("[bold green]Searching Polymarket Market..."):
+            async def get_all_relevant_markets(query):
+                active = await self._pm_client_cache.gamma_search(query, status="active")
+                closed = await self._pm_client_cache.gamma_search(query, status="closed")
+                return active + closed
+
+            def calculate_score(m):
+                q_up = m.question.upper()
+                t_up = ticker_symbol.upper()
+                
+                # Check for ticker OR company name (if available)
+                has_name = False
+                try: 
+                    name = yftictker.info.get('longName', '').upper()
+                    if name and name.split(' ')[0] in q_up: has_name = True
+                except: pass
+                
+                text_match = (t_up in q_up or has_name) and ("BEAT" in q_up or "EARNINGS" in q_up)
+                if not text_match: return -1
+                
+                score = 0
+                if hasattr(m, "end_date") and m.end_date:
+                    try:
+                        expiry = datetime.fromisoformat(m.end_date.replace("Z", "+00:00"))
+                        now_tz = datetime.now(expiry.tzinfo)
+                        
+                        if now_tz < expiry <= now_tz + timedelta(days=days):
+                            score += 100
+                        elif now_tz - timedelta(days=7) <= expiry <= now_tz: # Relaxed to 7 days
+                            score += 50
+                        elif expiry > now_tz + timedelta(days=days):
+                            score += 10
+                    except: pass
+                
+                if not getattr(m, 'closed', False):
+                    score += 5
+                return score
+
+            async def find_best_in_markets(m_list):
+                if not m_list: return None
+                sorted_m = sorted(m_list, key=calculate_score, reverse=True)
+                if sorted_m and calculate_score(sorted_m[0]) >= 10:
+                    best = sorted_m[0]
+                    if best.closed:
+                        try:
+                            full_m = await self._pm_client_cache.get_market_by_id(best.id)
+                            if full_m: return full_m
+                        except: pass
+                    return best
+                return None
+
+            # Try Ticker + context
+            markets = await get_all_relevant_markets(f"{ticker_symbol} beat earnings")
+            best_market = await find_best_in_markets(markets)
+            
+            if not best_market:
+                # Try Ticker only
+                markets = await get_all_relevant_markets(ticker_symbol)
+                best_market = await find_best_in_markets(markets)
+
+            if not best_market:
+                # Try Company Name fallback
+                try:
+                    name_search = yftictker.info.get('longName', '').split(' ')[0]
+                    if name_search:
+                        markets = await get_all_relevant_markets(f"{name_search} beat earnings")
+                        best_market = await find_best_in_markets(markets)
+                except: pass
+        
+        if not best_market:
+            self.console.print(f"[yellow]Warning: No active earnings market found for {ticker_symbol} on Polymarket.[/yellow]")
+            market_prob = 0.5 # Neutral if not found
+            question = "N/A (No Market Found)"
+        else:
+            market_prob = best_market.yes_price
+            question = best_market.question
+
+        # 2. Fetch yfinance historical EPS data
+        with self.console.status(f"[bold green]Fetching Historical EPS Data (last {lookback})..."):
+            try:
+                dates = yftictker.earnings_dates
+                
+                if dates is None or dates.empty:
+                    self.console.print(f"[red]Error: Could not find earnings history for {ticker_symbol} on yfinance.[/red]")
+                    return
+
+                # Parse lookback
+                years = 2
+                if "y" in lookback:
+                    years = int(lookback.replace("y", ""))
+                
+                now = datetime.now(dates.index.tz)
+                start_date = now - timedelta(days=365 * years)
+                
+                # Split into historical and upcoming
+                # We also include dates in the VERY recent past (last 3 days) that have NaN Reported EPS
+                # as "Just Reported" instead of filtering them out.
+                historical = dates[dates.index < now]
+                valid_historical = historical.dropna(subset=['Reported EPS', 'EPS Estimate'])
+                
+                # Find "Just Reported" (in past 3 days but no numbers yet)
+                just_reported = historical[
+                    (historical.index >= now - timedelta(days=3)) & 
+                    (historical['Reported EPS'].isna()) & 
+                    (historical['EPS Estimate'].notna())
+                ]
+                
+                upcoming = dates[dates.index >= now].sort_index().head(1)
+                
+                if valid_historical.empty and upcoming.empty and just_reported.empty:
+                    self.console.print(f"[red]Error: No earnings dates found in the last {lookback} for {ticker_symbol}.[/red]")
+                    return
+                
+                last_n_years = valid_historical[valid_historical.index > start_date]
+                
+                if last_n_years.empty and upcoming.empty and just_reported.empty:
+                    self.console.print(f"[red]Error: No earnings dates found in the last {lookback} for {ticker_symbol}.[/red]")
+                    return
+                
+                # Check for EPS Estimate and Reported EPS
+                if 'EPS Estimate' not in last_n_years.columns or 'Reported EPS' not in last_n_years.columns:
+                    self.console.print(f"[red]Error: Missing EPS Estimate/Reported columns for {ticker_symbol}.[/red]")
+                    return
+                
+                data = last_n_years
+                beats = data[data['Reported EPS'] > data['EPS Estimate']]
+                beat_rate = len(beats) / len(data) if not data.empty else 0
+                
+                # Calculate Avg Surprise
+                if not data.empty:
+                    if 'Surprise(%)' in data.columns:
+                        import pandas as pd
+                        avg_surprise = pd.to_numeric(data['Surprise(%)'], errors='coerce').mean()
+                    else:
+                        avg_surprise = ((data['Reported EPS'] - data['EPS Estimate']) / data['EPS Estimate'].abs() * 100).mean()
+                else:
+                    avg_surprise = 0
+
+                # Upcoming estimation
+                upcoming_est = "N/A"
+                upcoming_date = "N/A"
+                if not upcoming.empty:
+                    upcoming_est = f"{upcoming.iloc[0]['EPS Estimate']:.2f}"
+                    upcoming_date = upcoming.index[0].strftime("%Y-%m-%d")
+
+            except Exception as e:
+                self.console.print(f"[red]Error analyzing historical data: {str(e)}[/red]")
+                return
+
+        # 3. Fetch Polygon (Massive) Financials
+        with self.console.status(f"[bold green]Fetching Massive Financials for {ticker_symbol}..."):
+            from agent.tools.financials_tool import FinancialsTool
+            fin_tool = FinancialsTool()
+            # Set provider to massive explicitly for this check
+            fin_tool.provider = "massive"
+            
+            poly_data = {}
+            try:
+                # Get quarterly income statement
+                fin_json = fin_tool.get_financials(ticker=ticker_symbol, statement_type="income", period="quarterly")
+                poly_data = json.loads(fin_json)
+                fin_tool.close()
+            except Exception as e:
+                self.console.print(f"[dim yellow]Warning: Massive data unavailable: {e}[/dim yellow]")
+
+        # 4. AI Research & Sentiment
+        ai_prob = "N/A"
+        ai_reasoning = "N/A"
+        with self.console.status(f"[bold green]AI Researching latest news for {ticker_symbol}..."):
+            try:
+                from agent.tools.web_tool import WebSearchTool
+                web_tool = WebSearchTool()
+                search_query = f"{ticker_symbol} stock earnings outlook news guidance beat miss"
+                search_results = web_tool.search(search_query)
+                
+                # Prepare prompt for LLM
+                prompt = f"""
+                Analyze the following data for {ticker_symbol} and estimate the probability of them beating their upcoming earnings EPS.
+                
+                Historical Beat Rate: {beat_rate:.1%}
+                Upcoming Estimate: {upcoming_est}
+                Recent Financials (TTM): Revenue {poly_data.get('revenues', {}).get('value')}, Gross Profit {poly_data.get('gross_profit', {}).get('value')}
+                
+                Latest News/Search Results:
+                {search_results}
+                
+                Task: 
+                1. Give a probability (0% to 100%) that they will beat the earnings EPS estimate.
+                2. Provide a concise reasoning summary (max 2-3 sentences).
+                
+                Return exactly in this format:
+                PROBABILITY: XX%
+                REASONING: [Your reasoning]
+                """
+                
+                response = await asyncio.to_thread(self.agent.llm.invoke, prompt)
+                response_text = response.content if hasattr(response, "content") else str(response)
+                
+                # Parse probability
+                prob_match = re.search(r"PROBABILITY:\s*(\d+)%", response_text, re.IGNORECASE)
+                if prob_match:
+                    ai_prob = f"{prob_match.group(1)}%"
+                
+                # Parse reasoning
+                reasoning_match = re.search(r"REASONING:\s*(.*)", response_text, re.DOTALL | re.IGNORECASE)
+                if reasoning_match:
+                    ai_reasoning = reasoning_match.group(1).strip()
+                
+                web_tool.close()
+            except Exception as e:
+                ai_reasoning = f"AI Research failed: {e}"
+
+        # 5. Display Results
+        
+        # A. Comparison Table
+        market_label = "Current Forecast (YES)"
+        if best_market and getattr(best_market, 'closed', False):
+            res = getattr(best_market, 'resolution', 'Unknown')
+            market_label = f"Resolution ({res})"
+            if res:
+                if res.upper() == 'YES': market_prob = 1.0
+                elif res.upper() == 'NO': market_prob = 0.0
+            
+        table = Table(title=f"Earnings Prediction Analysis: {ticker_symbol}", box=None)
+        table.add_column("Source", style="bold cyan")
+        table.add_column("Metric", style="dim")
+        table.add_column("Value", justify="right")
+        
+        table.add_row("Polymarket", market_label, f"[bold]{market_prob:.1%}[/bold]")
+        table.add_row("yfinance", "Upcoming Estimate", f"[bold yellow]{upcoming_est}[/bold yellow] ({upcoming_date})")
+        table.add_row("yfinance", f"Hist. Beat Rate ({lookback})", f"[bold green]{beat_rate:.1%}[/bold green]" if beat_rate > market_prob else f"[bold]{beat_rate:.1%}[/bold]")
+        table.add_row("yfinance", "Avg Surprise Magnitude", f"{avg_surprise:+.1f}%")
+        
+        # Add Polygon Data if available
+        if poly_data and "error" not in poly_data:
+            rev_data = poly_data.get("revenues", {})
+            gp_data = poly_data.get("gross_profit", {})
+            ni_data = poly_data.get("net_income_loss", {})
+            
+            def fmt_val(d):
+                v = d.get("value")
+                if v is None: return "N/A"
+                if abs(v) >= 1e9: return f"${v/1e9:.1f}B"
+                if abs(v) >= 1e6: return f"${v/1e6:.1f}M"
+                return f"${v:,.0f}"
+
+            table.add_row("Massive", f"Revenue ({poly_data.get('_metadata',{}).get('fiscal_period','Q?')})", f"[bold cyan]{fmt_val(rev_data)}[/bold cyan]")
+            table.add_row("Massive", "Gross Profit", fmt_val(gp_data))
+            table.add_row("Massive", "Net Income", fmt_val(ni_data))
+
+        table.add_row("AI Agent", "Search-Based Beat Prob.", f"[bold magenta]{ai_prob}[/bold magenta]")
+        table.add_row("yfinance", "Sample Size (Quarters)", str(len(data)))
+        
+        edge = beat_rate - market_prob
+        edge_color = "green" if edge > 0.05 else "red" if edge < -0.05 else "white"
+        table.add_row("ANALYSIS", "[italic]Historical Edge[/italic]", f"[bold {edge_color}]{edge:+.1%}[/bold {edge_color}]")
+        
+        self.console.print(table)
+        
+        # B. Detailed Earnings History
+        history_title = f"Historical EPS Track Record (Last {len(data)} Quarters)"
+        if not upcoming.empty:
+            history_title += f" + Upcoming {upcoming_date}"
+            
+        history_table = Table(title=history_title, header_style="bold magenta")
+        history_table.add_column("Date", style="dim")
+        history_table.add_column("Estimate", justify="right")
+        history_table.add_column("Reported", justify="right")
+        history_table.add_column("Surprise %", justify="right")
+        history_table.add_column("Result", justify="center")
+
+        # 1. Include Just Reported (Pending Data) first
+        if not just_reported.empty:
+            for date, row in just_reported.sort_index(ascending=False).iterrows():
+                # If we have a resolved Polymarket market, use its result
+                res_display = "[bold yellow]JUST REPORTED[/bold yellow]"
+                if best_market and getattr(best_market, 'closed', False):
+                    # Check if the date matches the market end_date (approx)
+                    try:
+                        m_date = datetime.fromisoformat(best_market.end_date.replace("Z", "+00:00"))
+                        if abs((date - m_date).days) <= 5: # Within 5 days
+                            res_val = getattr(best_market, 'resolution', 'Unknown')
+                            res_display = f"[bold green]BEAT[/bold green] (Poly)" if res_val == 'YES' else f"[bold red]MISS[/bold red] (Poly)" if res_val == 'NO' else res_display
+                    except:
+                        pass
+                
+                history_table.add_row(
+                    date.strftime("%Y-%m-%d"),
+                    f"{row['EPS Estimate']:.2f}",
+                    "N/A",
+                    "N/A",
+                    res_display
+                )
+
+        # 2. Include Upcoming next
+        if not upcoming.empty:
+            row = upcoming.iloc[0]
+            history_table.add_row(
+                upcoming.index[0].strftime("%Y-%m-%d"),
+                f"{row['EPS Estimate']:.2f}",
+                "N/A",
+                "N/A",
+                "[bold yellow]PENDING[/bold yellow]"
+            )
+
+        # Show latest reports first
+        sorted_data = data.sort_index(ascending=False)
+        for date, row in sorted_data.iterrows():
+            est = row['EPS Estimate']
+            rep = row['Reported EPS']
+            surp = row.get('Surprise(%)') or ((rep - est) / abs(est) * 100 if est != 0 else 0)
+            
+            # Convert surp to float for comparison if it's a series or weird type
+            try:
+                surp_val = float(surp)
+            except:
+                surp_val = 0
+                
+            res = "[bold green]BEAT[/bold green]" if rep > est else "[bold red]MISS[/bold red]"
+            surp_style = "green" if surp_val > 0 else "red"
+            
+            history_table.add_row(
+                date.strftime("%Y-%m-%d"),
+                f"{est:.2f}",
+                f"{rep:.2f}",
+                f"[{surp_style}]{surp_val:+.1f}%[/{surp_style}]",
+                res
+            )
+        
+        self.console.print(history_table)
+        
+        if ai_reasoning != "N/A":
+            self.console.print(Panel(ai_reasoning, title="[bold magenta]AI Research Reasoning[/bold magenta]", border_style="magenta"))
+
+        self.console.print(Panel(f"[dim]{question}[/dim]", title="Polymarket Reference"))
+
     def _show_help(self):
         table = Table(title="FinCode Global Commands (BASH-STYLE)", show_header=True, header_style="bold cyan")
         table.add_column("Command", style="bold yellow")
         table.add_column("Description")
         table.add_column("Speed", style="italic green")
 
-        table.add_row("load <ticker>", "Direct profile lookup (Massive)", "Instant")
-        table.add_row("news [ticker]", "Direct news lookup (xAI/Grok)", "Instant")
-        table.add_row("financials [ticker]", "Direct financials lookup (Massive/Polygon)", "Instant")
-        table.add_row("quote [ticker]", "Real-time quote data", "Instant")
-        table.add_row("poly:backtest <city> <numdays>", "Multi-day Highest-Prob Backtest", "5-10s")
-        table.add_row("poly:backtestv2 <city> <numdays>", "Cross-Sectional YES/NO Backtest", "5-10s")
-        table.add_row("poly:predict <city> <numdays>", "Multi-day Highest-Prob Prediction", "5-10s")
-        table.add_row("poly:weather [city]", "Scan for weather opportunities or search by city", "Instant")
-        table.add_row("poly:paperbuy <amt> <id>", "Simulate a trade in your paper portfolio", "Instant")
-        table.add_row("poly:papersell <id>", "Sell an open paper trade by ID", "Instant")
-        table.add_row("poly:paperportfolio", "View your paper trading performance", "Instant")
-        table.add_row("poly:buy <amt> <id>", "REAL Order Execution (Max $1000.00)", "~2s")
-        table.add_row("poly:sell <amt> <id>", "REAL Order Selling (Shares)", "~2s")
-        table.add_row("poly:portfolio", "View Real On-Chain USDC + Positions", "Instant")
-        table.add_row("poly:simbuy <amt> <id>", "Simulate price/slippage without trading", "Instant")
+        table.add_row("load (ticker)", "Direct profile lookup (Massive)", "Instant")
+        table.add_row("news (ticker)", "Direct news lookup (xAI/Grok)", "Instant")
+        table.add_row("financials (ticker)", "Direct financials lookup (Massive)", "Instant")
+        table.add_row("quote (ticker)", "Real-time quote data", "Instant")
+        table.add_row("poly:backtest (city) (numdays)", "Cross-Sectional YES/NO Backtest", "5-10s")
+        table.add_row("poly:predict (city) (numdays)", "Multi-day Highest-Prob Prediction", "5-10s")
+        table.add_row("poly:predict earnings (ticker) (days) (lookback)", "Compare YF Beat Rate vs Polymarket Price", "3-5s")
+        table.add_row("poly:weather (city)", "Scan for weather opportunities or search by city", "Instant")
+        table.add_row("poly:buy (paper/real) (amt) (id)", "Buy YES shares (Default: Paper)", "~2s")
+        table.add_row("poly:sell (paper/real) (id/amt) (id)", "Sell shares (Default: Paper)", "~2s")
+        table.add_row("poly:portfolio (paper/real)", "View positions (Default: Real)", "Instant")
         table.add_row("reset, r, ..", "Reset context/ticker", "-")
         table.add_row("help, h, ?", "Displays this menu", "-")
         table.add_row("cls", "Clear screen", "-")

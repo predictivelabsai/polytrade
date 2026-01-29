@@ -254,14 +254,6 @@ class Agent:
                     args_schema=None,
                 )
             )
-            tools.append(
-                StructuredTool(
-                    name="simulate_polymarket_trade",
-                    description="Simulate a trade on Polymarket by walking the CLOB order book for a specific amount. Parameters: amount (USDC), market_id (Token ID).",
-                    func=pm_wrapper.simulate_polymarket_trade,
-                    args_schema=None,
-                )
-            )
             
             search_tool = WeatherSearchTool(pm_client)
             tools.append(

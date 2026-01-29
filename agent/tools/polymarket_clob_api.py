@@ -57,6 +57,16 @@ class PolymarketCLOBClient:
                  api_passphrase=self.passphrase
              )
         
+        # Monkeypatch py_clob_client to disable HTTP/2 and increase timeout
+        try:
+            import httpx
+            import py_clob_client.http_helpers.helpers as helpers
+            if not hasattr(helpers, '_fixed_client') or not helpers._fixed_client:
+                helpers._http_client = httpx.Client(http2=False, timeout=60.0)
+                helpers._fixed_client = True
+        except ImportError:
+            pass
+        
         self.client = ClobClient(
             host=self.host,
             key=self.key,

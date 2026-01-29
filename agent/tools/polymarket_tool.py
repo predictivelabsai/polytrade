@@ -59,6 +59,17 @@ class PolymarketClient:
         if api_key:
             self.headers["Authorization"] = f"Bearer {api_key}"
 
+        # Monkeypatch py_clob_client to disable HTTP/2 and increase timeout
+        # This fixes "Request exception!" (httpx.RequestError) on many systems (Mac/Cloudflare)
+        try:
+            import py_clob_client.http_helpers.helpers as helpers
+            if not hasattr(helpers, '_fixed_client') or not helpers._fixed_client:
+                logger.info("Monkeypatching py_clob_client: Disabling HTTP/2 and increasing timeout.")
+                helpers._http_client = httpx.Client(http2=False, timeout=60.0)
+                helpers._fixed_client = True
+        except ImportError:
+            pass
+
         # Lazy initialize ClobClient for Real Trading
         self.clob_client = None
         self.proxy_address = None
@@ -229,8 +240,14 @@ class PolymarketClient:
             return {"status": "success", "response": resp}
             
         except Exception as e:
-            logger.error(f"Real Trade Failed: {e}")
-            return {"status": "error", "message": str(e)}
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"Real Trade Failed: {e}\n{error_details}")
+            return {
+                "status": "error", 
+                "message": f"{type(e).__name__}: {str(e)}",
+                "details": error_details if os.getenv("FINCODE_DEBUG") == "true" else "See logs for traceback"
+            }
 
     async def close(self):
         """Close the HTTP client."""
@@ -278,6 +295,47 @@ class PolymarketClient:
             return markets
         except Exception as e:
             logger.error(f"Error fetching markets: {e}")
+            return []
+
+    async def get_markets_by_tag(
+        self,
+        tag_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        active: bool = True,
+        closed: bool = False,
+    ) -> List[PolymarketMarket]:
+        """Fetch markets for a specific tag using the events pagination endpoint."""
+        try:
+            params = {
+                "tag_id": tag_id,
+                "limit": limit,
+                "offset": offset,
+                "active": "true" if active else "false",
+                "closed": "true" if closed else "false",
+                "archived": "false",
+            }
+            response = await self.client.get(
+                f"{self.BASE_URL}/events/pagination",
+                params=params,
+                headers=self.headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            all_markets = []
+            events = data if isinstance(data, list) else data.get("data", [])
+            for event in events:
+                markets_data = event.get("markets", [])
+                for m_data in markets_data:
+                    try:
+                        all_markets.append(self._parse_market(m_data))
+                    except Exception as e:
+                        continue
+            
+            return all_markets
+        except Exception as e:
+            logger.error(f"Error fetching markets by tag {tag_id}: {e}")
             return []
 
     async def gamma_search(self, q: str, status: str = "active", limit: int = 50) -> List[PolymarketMarket]:
@@ -507,7 +565,33 @@ class PolymarketClient:
                 prices_list = []
         
         # Select base YES price
-        if last_price is not None:
+        resolution = data.get("outcome") or data.get("resolutionOutcome")
+        closed = data.get("closed", False)
+        
+        # If closed and resolution is missing, try to derive from outcomePrices (e.g. ["0", "1"])
+        if closed and not resolution:
+            op_raw = data.get("outcomePrices")
+            if op_raw:
+                try:
+                    if isinstance(op_raw, str): op_prices = json.loads(op_raw)
+                    else: op_prices = op_raw
+                    
+                    if len(op_prices) >= 2:
+                        # Index 0 is usually 'Yes', Index 1 is 'No'
+                        if str(op_prices[0]) == "1": resolution = "Yes"
+                        elif str(op_prices[1]) == "1": resolution = "No"
+                        # Fallback to lastTradePrice if available and essentially 0 or 1
+                        elif last_price is not None:
+                            lp = float(last_price)
+                            if lp < 0.01: resolution = "No"
+                            elif lp > 0.99: resolution = "Yes"
+                except: pass
+
+        if closed and resolution == "Yes":
+            yes_price = 1.0
+        elif closed and resolution == "No":
+            yes_price = 0.0
+        elif last_price is not None:
             yes_price = float(last_price)
         elif mid_price is not None:
             yes_price = mid_price
@@ -517,7 +601,7 @@ class PolymarketClient:
             yes_price = 0.5
             
         no_price = 1.0 - yes_price
-
+        
         clob_token_ids = data.get("clobTokenIds", [])
         if isinstance(clob_token_ids, str) and clob_token_ids.strip():
             try:
@@ -538,8 +622,8 @@ class PolymarketClient:
             end_date=data.get("endDate", ""),
             condition_id=data.get("conditionId"),
             clob_token_ids=clob_token_ids,
-            closed=data.get("closed", False),
-            resolution=data.get("outcome") # This might be the winning outcome label
+            closed=closed,
+            resolution=resolution
         )
 
 

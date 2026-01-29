@@ -55,6 +55,8 @@ class BacktestEngine:
         pending_invested = 0
         all_results = []
         trades_summary = []
+        equity_curve = [1000.0]  # Start with bankroll from CLI (implied)
+        current_balance = 1000.0
         
         markets_found_total = 0
         markets_processed_total = 0
@@ -80,9 +82,8 @@ class BacktestEngine:
             count = max(1, lookback_days)
             date_range = [(current_dt + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(count)]
         else:
-            # Backtest: End yesterday
-            end_dt = datetime.strptime(target_date, "%Y-%m-%d")
-            effective_end_dt = end_dt - timedelta(days=1)
+            # Backtest: include today (end_dt)
+            effective_end_dt = datetime.strptime(target_date, "%Y-%m-%d")
             # Ensure lookback_days is at least 1
             count = max(1, lookback_days)
             date_range = [(effective_end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(count - 1, -1, -1)]
@@ -491,11 +492,8 @@ class BacktestEngine:
                 if is_best_v1 or v2_mode:
                     # Default to simulated weather
                     raw_actual = actual_weather["tempmax"]
-                    actual_display = f"{round(raw_actual, 1)}°F"
-                    
-                    if threshold_info.get("original_unit") == "C":
-                        c_val = (raw_actual - 32) * 5/9
-                        actual_display = f"{round(c_val, 1)}°C ({round(raw_actual, 1)}°F)"
+                    c_val = (raw_actual - 32) * 5/9
+                    actual_display = f"{round(c_val, 1)}°C ({round(raw_actual, 1)}°F)"
 
                     # If official winner exists, OVERRIDE with that value
                     if official_winner_label:
@@ -507,13 +505,9 @@ class BacktestEngine:
                         
                         if win_m:
                             win_info = self._parse_threshold(win_m.question)
-                            if win_info.get("original_unit") == "C":
-                                w_c = win_info["original"]
-                                w_f = win_info["value"]
-                                actual_display = f"{w_c}°C ({round(w_f, 1)}°F)"
-                            else:
-                                w_f = win_info["value"]
-                                actual_display = f"{round(w_f, 1)}°F"
+                            w_f = win_info["value"]
+                            w_c = (w_f - 32) * 5/9
+                            actual_display = f"{round(w_c, 1)}°C ({round(w_f, 1)}°F)"
                             
                             # Add small marker
                             actual_display += "*"
@@ -544,6 +538,11 @@ class BacktestEngine:
                         "forecast_secondary": round(secondary_weather.get("tempmax", 0), 1) if secondary_weather else "N/A"
                     })
 
+                    # Track equity after each day (simplified: one trade per day usually)
+                    if not is_future:
+                        current_balance += pnl
+                        equity_curve.append(current_balance)
+
         # 6. Save and Return Summary
         os.makedirs("test-results", exist_ok=True)
         file_type = "prediction" if is_prediction else "backtest"
@@ -552,6 +551,16 @@ class BacktestEngine:
         final_pnl = total_payout - total_invested
         total_roi = (final_pnl / total_invested * 100) if total_invested > 0 else 0
         resolved_roi = ((resolved_payout - resolved_invested) / resolved_invested * 100) if resolved_invested > 0 else 0
+
+        # Calculate Max Drawdown from equity curve
+        max_dd = 0
+        peak = equity_curve[0]
+        for val in equity_curve:
+            if val > peak:
+                peak = val
+            dd = (peak - val) / peak * 100 if peak > 0 else 0
+            if dd > max_dd:
+                max_dd = dd
 
         if all_results:
             summary_row = {k: "" for k in all_results[0].keys()}
@@ -576,6 +585,7 @@ class BacktestEngine:
             "resolved_invested": resolved_invested,
             "resolved_payout": resolved_payout,
             "resolved_roi": resolved_roi,
+            "max_drawdown": max_dd,
             "pending_invested": pending_invested,
             "final_pnl": final_pnl,
             "final_roi": total_roi,

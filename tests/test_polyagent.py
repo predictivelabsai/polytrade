@@ -639,22 +639,6 @@ class TestPolymarketWrapper:
         assert opportunities[0]["market_price"] == 0.06
         assert opportunities[0]["fair_price"] == 0.8  # probability_high
 
-    @pytest.mark.asyncio
-    async def test_simulate_trade_mock(self):
-        """Test trade simulation logic."""
-        mock_clob = AsyncMock(spec=PolymarketCLOBClient)
-        mock_clob.get_order_book.return_value = MagicMock(
-            asks=[{"price": 0.05, "size": 1000}, {"price": 0.06, "size": 1000}],
-            best_ask=0.05
-        )
-        
-        wrapper = PolymarketWrapper(AsyncMock(), mock_clob, AsyncMock())
-        result = await wrapper.simulate_polymarket_trade(amount=50.0, market_id="m1")
-        
-        assert "vwap" in result
-        assert result["shares_bought"] == 1000.0
-        assert result["vwap"] == 0.05
-        assert result["slippage"] == 0.0
 
 
 if __name__ == "__main__":

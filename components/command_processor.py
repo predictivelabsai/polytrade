@@ -167,12 +167,31 @@ class CommandProcessor:
                 # Check for earnings (positional or key:value)
                 first_arg = effective_args[0].lower()
                 if first_arg in ["earnings", "market:earnings"]:
-                    # Positional check: poly:predict earnings MSFT 2 2y
-                    if len(effective_args) >= 2 and ":" not in effective_args[1] and first_arg == "earnings":
-                        ticker = effective_args[1].upper()
-                        days = int(effective_args[2]) if len(effective_args) > 2 else 2
-                        lookback = effective_args[3] if len(effective_args) > 3 else "2y"
-                        await self._handle_poly_predict_earnings(ticker, days, lookback)
+                    # Positional check: poly:predict earnings MSFT 2 2y OR poly:predict earnings 7
+                    if len(effective_args) >= 2 and ":" not in effective_args[1]:
+                        second_arg = effective_args[1]
+                        if second_arg.isdigit():
+                            # Batch mode: poly:predict earnings (days) (lookback)
+                            days = int(second_arg)
+                            lookback = effective_args[2] if len(effective_args) > 2 else "2y"
+                            await self._handle_poly_predict_earnings(None, days, lookback)
+                        else:
+                            # Ticker mode: poly:predict earnings (ticker) (days) (lookback)
+                            ticker = second_arg.upper()
+                            days = 2 # Default
+                            lookback = "2y" # Default
+                            
+                            if len(effective_args) > 2:
+                                arg2 = effective_args[2]
+                                if arg2.isdigit():
+                                    days = int(arg2)
+                                    if len(effective_args) > 3:
+                                        lookback = effective_args[3]
+                                else:
+                                    # Case like: poly:predict earnings EXXON 2y
+                                    lookback = arg2
+                            
+                            await self._handle_poly_predict_earnings(ticker, days, lookback)
                         return True, None
                     
                     # Key:Value style: poly:predict market:earnings ticker:MSFT days:2
@@ -183,10 +202,6 @@ class CommandProcessor:
                             arg_dict[k.lower()] = v.upper() if k.lower() == "ticker" else v
                     
                     ticker = arg_dict.get("ticker", self.current_ticker)
-                    if not ticker:
-                        self.console.print("[red]Error: Specify ticker:<symbol> or use positional: poly:predict earning <ticker>[/red]")
-                        return True, None
-                        
                     days = int(arg_dict.get("days", "2"))
                     lookback = arg_dict.get("lookback", "2y")
                     
@@ -904,8 +919,136 @@ class CommandProcessor:
         
         self.console.print(Panel(summary, title="[bold]Portfolio Summary[/bold]", border_style="cyan"))
 
-    async def _handle_poly_predict_earnings(self, ticker_symbol: str, days: int, lookback: str):
-        """Handle the poly:predict market:earnings command."""
+    async def _handle_poly_predict_earnings(self, ticker_symbol: Optional[str], days: int, lookback: str):
+        """Handle the poly:predict market:earnings command (Single Ticker or Batch Days)."""
+        from datetime import datetime, timedelta
+        import yfinance as yf
+        import re
+        import asyncio
+
+        if ticker_symbol:
+            # Single Ticker Mode
+            await self._run_single_earnings_prediction(ticker_symbol, days, lookback)
+        else:
+            # Batch Mode: Find all earnings in upcoming 'days'
+            self.console.print(f"[bold cyan]Scanning for upcoming earnings events in the next {days} days...[/bold cyan]")
+            
+            if not self._pm_client_cache:
+                from agent.tools.polymarket_tool import get_polymarket_client
+                self._pm_client_cache = await get_polymarket_client()
+
+            with self.console.status("[bold green]Searching Polymarket for Earnings Markets..."):
+                markets = await self._pm_client_cache.gamma_search("beat earnings", status="active")
+            
+            if not markets:
+                self.console.print("[yellow]No active earnings markets found on Polymarket.[/yellow]")
+                return
+
+            # Filter for markets resolving within 'days'
+            events_to_analyze = []
+            now = datetime.now()
+            target_limit = now + timedelta(days=days)
+            
+            # Simple ticker extraction: Look for uppercase words of length 1-5 followed by 'BEAT' or in parenthesis
+            # Improved: only look for words that are likely to be tickers (not common words)
+            ticker_pattern = re.compile(r'\b([A-Z]{1,5})\b')
+            common_words = {
+                "BEAT", "EPS", "Q1", "Q2", "Q3", "Q4", "FY", "US", "QUARTER", "THE", "WILL", 
+                "AND", "FOR", "WITH", "THAT", "THIS", "FROM", "THEY", "BEATS", "MISS", 
+                "TOTAL", "ALL", "NEW", "CORP", "INC", "CO", "LTD", "PLC", "TECH", "OIL",
+                "GAS", "GOLD", "BANK", "VISA" # VISA is a name but often used generically if not the ticker
+            }
+            
+            seen_tickers = set()
+            for m in markets:
+                if not m.end_date: continue
+                try:
+                    expiry = datetime.fromisoformat(m.end_date.replace("Z", "+00:00"))
+                    
+                    if now.replace(tzinfo=expiry.tzinfo) <= expiry <= (now + timedelta(days=days)).replace(tzinfo=expiry.tzinfo):
+                        # Extract ticker
+                        q_up = m.question.upper()
+                        potential_tickers = ticker_pattern.findall(q_up)
+                        
+                        # Find the first one that isn't a common word and we haven't seen
+                        ticker = None
+                        for pt in potential_tickers:
+                            if pt in common_words: continue
+                            if pt in seen_tickers: continue
+                            ticker = pt
+                            break
+                        
+                        if ticker:
+                            seen_tickers.add(ticker)
+                            events_to_analyze.append({
+                                "ticker": ticker,
+                                "market": m,
+                                "expiry": expiry
+                            })
+                except:
+                    continue
+
+            if not events_to_analyze:
+                self.console.print(f"[yellow]No earnings markets found resolving in the next {days} days.[/yellow]")
+                return
+
+            self.console.print(f"[green]Found {len(events_to_analyze)} upcoming earnings events. Analyzing...[/green]")
+            
+            # Use a summary table for batch results
+            summary_table = Table(title=f"Upcoming Earnings Analysis (Next {days} Days)", header_style="bold magenta")
+            summary_table.add_column("Ticker", style="bold cyan")
+            summary_table.add_column("Date", justify="center")
+            summary_table.add_column("Hist. Beat", justify="right")
+            summary_table.add_column("Poly YES%", justify="right")
+            summary_table.add_column("Edge", justify="right")
+            summary_table.add_column("Question", ratio=1, overflow="ellipsis")
+
+            for event in sorted(events_to_analyze, key=lambda x: x['expiry']):
+                ticker = event['ticker']
+                m = event['market']
+                
+                # Simplified analysis for batch
+                try:
+                    yft = yf.Ticker(ticker)
+                    dates = yft.earnings_dates
+                    if dates is not None and not dates.empty:
+                        # Parsing lookback for batch
+                        years = 2
+                        if "y" in lookback: years = int(lookback.replace("y", ""))
+                        start_date = now.replace(tzinfo=dates.index.tz) - timedelta(days=365 * years)
+                        
+                        hist = dates[dates.index < now.replace(tzinfo=dates.index.tz)]
+                        valid_hist = hist.dropna(subset=['Reported EPS', 'EPS Estimate'])
+                        recent_hist = valid_hist[valid_hist.index > start_date]
+                        
+                        if not recent_hist.empty:
+                            beats = recent_hist[recent_hist['Reported EPS'] > recent_hist['EPS Estimate']]
+                            beat_rate = len(beats) / len(recent_hist)
+                            
+                            m_prob = m.yes_price
+                            edge = beat_rate - m_prob
+                            edge_color = "bright_green" if edge > 0.05 else "bright_red" if edge < -0.05 else "white"
+                            
+                            summary_table.add_row(
+                                ticker,
+                                event['expiry'].strftime("%b %d"),
+                                f"{beat_rate:.1%}",
+                                f"{m_prob:.1%}",
+                                f"[{edge_color}]{edge:+.1%}[/{edge_color}]",
+                                m.question
+                            )
+                        else:
+                            summary_table.add_row(ticker, event['expiry'].strftime("%b %d"), "N/A", f"{m.yes_price:.1%}", "---", m.question)
+                    else:
+                        summary_table.add_row(ticker, event['expiry'].strftime("%b %d"), "N/A", f"{m.yes_price:.1%}", "---", m.question)
+                except:
+                    summary_table.add_row(ticker, event['expiry'].strftime("%b %d"), "ERR", f"{m.yes_price:.1%}", "---", m.question)
+
+            self.console.print(summary_table)
+            self.console.print("\n[dim]Tip: Use 'poly:predict earnings <ticker>' for a deep dive into any specific ticker above.[/dim]")
+
+    async def _run_single_earnings_prediction(self, ticker_symbol: str, days: int, lookback: str):
+        """Original detailed logic for a single ticker prediction."""
         from datetime import datetime, timedelta
         import yfinance as yf
         import re

@@ -733,12 +733,12 @@ class CommandProcessor:
                 trade_table.add_column("Actual", justify="center", style="blue", no_wrap=True)
                 if is_prediction or v2_mode:
                     trade_table.add_column("ID", style="cyan", width=8)
-                if v2_mode:
+                if is_prediction or v2_mode:
                     trade_table.add_column("Side", justify="center", width=6)
                 trade_table.add_column("Our%", justify="right", width=5)
                 trade_table.add_column("Mkt%", justify="right", width=5)
                 trade_table.add_column("Price", justify="right", width=7)
-                if not v2_mode:
+                if not v2_mode or is_prediction:
                     trade_table.add_column("Ends In", justify="right", style="dim")
                 trade_table.add_column("Result", justify="center")
 
@@ -772,7 +772,7 @@ class CommandProcessor:
                     if is_prediction or v2_mode:
                         row_data.append(str(t.get("market_id", "N/A")))
                     
-                    if v2_mode:
+                    if is_prediction or v2_mode:
                         side = t.get("Side", "NONE")
                         side_color = "bright_green" if side == "YES" else "bright_red" if side == "NO" else "dim"
                         row_data.append(f"[{side_color}]{side}[/{side_color}]")
@@ -783,7 +783,7 @@ class CommandProcessor:
                         f"${t['price']:.3f}"
                     ])
                     
-                    if not v2_mode:
+                    if not v2_mode or is_prediction:
                         row_data.append(t.get("countdown", "N/A"))
                         
                     row_data.append(f"[{res_color}]{t['result']}[/{res_color}]")

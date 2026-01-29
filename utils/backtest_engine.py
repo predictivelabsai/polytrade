@@ -328,37 +328,51 @@ class BacktestEngine:
 
             if not group_results: continue
 
-            # 5. Identify Potential trades (V2.2: Max 1 YES, Max 1 NO)
-            best_bucket = max(group_results, key=lambda x: x["fair_price"])
-            potential_yes = []
-            potential_no = []
-            for item in group_results:
-                item_price = item["entry_data"].get("price", 0)
-                item_edge = item["entry_data"].get("edge", 0)
-                if item_price > 0:
-                    if item_edge > 0.02: # YES Edge
-                        potential_yes.append({"item": item, "side": "YES", "edge": item_edge, "price": item_price})
-                    elif item_edge < -0.02: # NO Edge
-                        potential_no.append({"item": item, "side": "NO", "edge": -item_edge, "price": 1.0 - item_price})
+            # 5. Identify Potential trades (Improved Cross-Sectional Selection)
+            # Find the bucket we think is the most likely winner
+            predicted_winner = max(group_results, key=lambda x: x["fair_price"])
             
-            # Sort both by absolute edge descending
-            potential_yes.sort(key=lambda x: x["edge"], reverse=True)
-            potential_no.sort(key=lambda x: x["edge"], reverse=True)
-            
-            # Select top trades
             selected_trades = []
-            if potential_yes:
-                selected_trades.append(potential_yes[0])
             
-            # For V2 mode, we also allow a NO hedge
-            if v2_mode and potential_no:
-                # Basic rule: Don't pick the same bucket for YES and NO (contradictory)
-                # Usually edge logic prevents this anyway, but let's be safe.
-                best_no = potential_no[0]
-                if not selected_trades or best_no["item"] is not selected_trades[0]["item"]:
-                    selected_trades.append(best_no)
-                elif len(potential_no) > 1:
-                    selected_trades.append(potential_no[1])
+            # 1. Evaluate Predicted Winner for YES edge
+            winner_price = predicted_winner["entry_data"].get("price", 0)
+            winner_edge = predicted_winner["entry_data"].get("edge", 0)
+            if winner_price > 0 and winner_edge > 0.02:
+                selected_trades.append({
+                    "item": predicted_winner, 
+                    "side": "YES", 
+                    "edge": winner_edge, 
+                    "price": winner_price
+                })
+            
+            # 2. Evaluate all other buckets for NO edge (Loser Hedges)
+            # These are high-probability trades because we think they WON'T happen.
+            if v2_mode or is_prediction:
+                potential_no = []
+                for item in group_results:
+                    # Don't bet NO on the bucket we think is going to win!
+                    if item is predicted_winner: continue
+                    
+                    item_price = item["entry_data"].get("price", 0)
+                    item_edge = item["entry_data"].get("edge", 0) # fair - mkt
+                    
+                    # Edge for NO side is (1-fair) - (1-mkt) = mkt - fair = -item_edge
+                    no_edge = -item_edge
+                    if item_price > 0 and no_edge > 0.02:
+                        # Success probability for NO side is (1-fair)
+                        # We only allow "most possible success" trades (e.g. > 50% prob)
+                        if (1.0 - item["fair_price"]) > 0.5:
+                            potential_no.append({
+                                "item": item, 
+                                "side": "NO", 
+                                "edge": no_edge, 
+                                "price": 1.0 - item_price
+                            })
+                
+                # Take top NO hedges (limit to 2 per day to avoid over-concentration)
+                if potential_no:
+                    potential_no.sort(key=lambda x: x["edge"], reverse=True)
+                    selected_trades.extend(potential_no[:2])
             
             # status check
             is_future = datetime.strptime(current_date, "%Y-%m-%d").date() >= datetime.now().date()
@@ -401,7 +415,7 @@ class BacktestEngine:
                 creation_ts = market.created_at.replace("Z", "+00:00")
                 creation_date_str = datetime.fromisoformat(creation_ts).strftime("%Y-%m-%d %H:%M")
 
-                is_best_v1 = (item is best_bucket)
+                is_best_v1 = (item is predicted_winner)
                 price = entry_data.get("price", 0)
                 edge = entry_data.get("edge", 0)
                 fair_price = item["fair_price"]
@@ -416,17 +430,17 @@ class BacktestEngine:
                 trade_edge = 0
                 
                 if selected_info:
-                    # V1 constraint: V1 must be YES and must be the BEST bucket
-                    if not v2_mode:
+                    # In V2 mode OR Prediction mode, we allow the selected trade (YES or NO)
+                    if v2_mode or is_prediction:
+                        trade_side = selected_info["side"]
+                        trade_price = selected_info["price"]
+                        trade_edge = selected_info["edge"]
+                    else:
+                        # Classic V1 constraint: must be YES and must be the BEST bucket
                         if selected_info["side"] == "YES" and is_best_v1:
                             trade_side = selected_info["side"]
                             trade_price = selected_info["price"]
                             trade_edge = selected_info["edge"]
-                    else:
-                        # V2: Take the selected trade (YES or NO)
-                        trade_side = selected_info["side"]
-                        trade_price = selected_info["price"]
-                        trade_edge = selected_info["edge"]
 
                 # Calculate trade metrics
                 payout = 0
@@ -489,7 +503,7 @@ class BacktestEngine:
                     "Is Recommendation": "YES" if is_best_v1 else "NO"
                 })
 
-                if is_best_v1 or v2_mode:
+                if is_best_v1 or v2_mode or is_prediction:
                     # Default to simulated weather
                     raw_actual = actual_weather["tempmax"]
                     c_val = (raw_actual - 32) * 5/9

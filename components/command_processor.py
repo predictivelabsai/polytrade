@@ -949,14 +949,18 @@ class CommandProcessor:
             now = datetime.now()
             target_limit = now + timedelta(days=days)
             
-            # Simple ticker extraction: Look for uppercase words of length 1-5 followed by 'BEAT' or in parenthesis
-            # Improved: only look for words that are likely to be tickers (not common words)
+            # Improved ticker extraction strategy:
+            # 1. Look for text in parentheses like (AAPL)
+            parens_pattern = re.compile(r'\(([A-Z]{1,5})\)')
+            # 2. Look for any uppercase words of length 1-5
             ticker_pattern = re.compile(r'\b([A-Z]{1,5})\b')
+            
             common_words = {
                 "BEAT", "EPS", "Q1", "Q2", "Q3", "Q4", "FY", "US", "QUARTER", "THE", "WILL", 
                 "AND", "FOR", "WITH", "THAT", "THIS", "FROM", "THEY", "BEATS", "MISS", 
                 "TOTAL", "ALL", "NEW", "CORP", "INC", "CO", "LTD", "PLC", "TECH", "OIL",
-                "GAS", "GOLD", "BANK", "VISA" # VISA is a name but often used generically if not the ticker
+                "GAS", "GOLD", "BANK", "VISA", "APPLE", "EXXON", "WALT", "DISNEY", "EBAY",
+                "FORD", "INTEL", "META" # Filter out names that are often written in caps but have different tickers
             }
             
             seen_tickers = set()
@@ -966,19 +970,31 @@ class CommandProcessor:
                     expiry = datetime.fromisoformat(m.end_date.replace("Z", "+00:00"))
                     
                     if now.replace(tzinfo=expiry.tzinfo) <= expiry <= (now + timedelta(days=days)).replace(tzinfo=expiry.tzinfo):
-                        # Extract ticker
                         q_up = m.question.upper()
-                        potential_tickers = ticker_pattern.findall(q_up)
                         
-                        # Find the first one that isn't a common word and we haven't seen
+                        # Strategy 1: Parens first (Highest confidence)
                         ticker = None
-                        for pt in potential_tickers:
-                            if pt in common_words: continue
-                            if pt in seen_tickers: continue
-                            ticker = pt
-                            break
+                        parens_matches = parens_pattern.findall(m.question) # Use original case case for parens? 
+                        # Actually use original case for parens to be safe but usually they are caps
+                        if not parens_matches:
+                            parens_matches = parens_pattern.findall(q_up)
+                            
+                        if parens_matches:
+                            for pm in parens_matches:
+                                if pm not in common_words:
+                                    ticker = pm
+                                    break
+                        
+                        # Strategy 2: First uppercase word not in common_words
+                        if not ticker:
+                            potential_tickers = ticker_pattern.findall(q_up)
+                            for pt in potential_tickers:
+                                if pt in common_words: continue
+                                ticker = pt
+                                break
                         
                         if ticker:
+                            if ticker in seen_tickers: continue
                             seen_tickers.add(ticker)
                             events_to_analyze.append({
                                 "ticker": ticker,
@@ -1009,15 +1025,25 @@ class CommandProcessor:
                 
                 # Simplified analysis for batch
                 try:
+                    # Use asyncio.to_thread for yf calls to avoid blocking, though yfinance is mostly IO
                     yft = yf.Ticker(ticker)
+                    
+                    # Secondary check if yfinance fails to find ticker (maybe it's a name?)
                     dates = yft.earnings_dates
+                    if (dates is None or dates.empty) and len(ticker) > 5:
+                        # Try searching by name? (Too slow for batch, skip for now)
+                        pass
+
                     if dates is not None and not dates.empty:
                         # Parsing lookback for batch
                         years = 2
                         if "y" in lookback: years = int(lookback.replace("y", ""))
-                        start_date = now.replace(tzinfo=dates.index.tz) - timedelta(days=365 * years)
                         
-                        hist = dates[dates.index < now.replace(tzinfo=dates.index.tz)]
+                        # Timezone awareness
+                        now_tz = now.replace(tzinfo=dates.index.tz)
+                        start_date = now_tz - timedelta(days=365 * years)
+                        
+                        hist = dates[dates.index < now_tz]
                         valid_hist = hist.dropna(subset=['Reported EPS', 'EPS Estimate'])
                         recent_hist = valid_hist[valid_hist.index > start_date]
                         
@@ -1025,16 +1051,21 @@ class CommandProcessor:
                             beats = recent_hist[recent_hist['Reported EPS'] > recent_hist['EPS Estimate']]
                             beat_rate = len(beats) / len(recent_hist)
                             
+                            # Check if this market is ALREADY RESOLVED even if yfinance doesn't show it
                             m_prob = m.yes_price
+                            if m.closed and m.resolution:
+                                m_prob = 1.0 if m.resolution.upper() == "YES" else 0.0
+                            
                             edge = beat_rate - m_prob
                             edge_color = "bright_green" if edge > 0.05 else "bright_red" if edge < -0.05 else "white"
                             
+                            res_marker = "✓ " if m.closed else ""
                             summary_table.add_row(
                                 ticker,
                                 event['expiry'].strftime("%b %d"),
                                 f"{beat_rate:.1%}",
                                 f"{m_prob:.1%}",
-                                f"[{edge_color}]{edge:+.1%}[/{edge_color}]",
+                                f"[{edge_color}]{res_marker}{edge:+.1%}[/{edge_color}]",
                                 m.question
                             )
                         else:
@@ -1045,7 +1076,7 @@ class CommandProcessor:
                     summary_table.add_row(ticker, event['expiry'].strftime("%b %d"), "ERR", f"{m.yes_price:.1%}", "---", m.question)
 
             self.console.print(summary_table)
-            self.console.print("\n[dim]Tip: Use 'poly:predict earnings <ticker>' for a deep dive into any specific ticker above.[/dim]")
+            self.console.print("\n[dim]Tip: ✓ = Already Resolved. Use 'poly:predict earnings <ticker>' for a deep dive.[/dim]")
 
     async def _run_single_earnings_prediction(self, ticker_symbol: str, days: int, lookback: str):
         """Original detailed logic for a single ticker prediction."""
@@ -1154,6 +1185,7 @@ class CommandProcessor:
                 if "y" in lookback:
                     years = int(lookback.replace("y", ""))
                 
+                # Use current date with timezone from data
                 now = datetime.now(dates.index.tz)
                 start_date = now - timedelta(days=365 * years)
                 
@@ -1240,36 +1272,54 @@ class CommandProcessor:
                 
                 # Prepare prompt for LLM
                 prompt = f"""
-                Analyze the following data for {ticker_symbol} and estimate the probability of them beating their upcoming earnings EPS.
+                Analyze the following data for {ticker_symbol} and estimate the probability of them beating their upcoming earnings EPS estimate.
                 
-                Historical Beat Rate: {beat_rate:.1%}
-                Upcoming Estimate: {upcoming_est}
-                Recent Financials (TTM): Revenue {poly_data.get('revenues', {}).get('value')}, Gross Profit {poly_data.get('gross_profit', {}).get('value')}
+                HISTORICAL PERFORMANCE:
+                - Beat Rate (Last {lookback}): {beat_rate:.1%}
+                - Average Surprise Magnitude: {avg_surprise:+.1f}%
                 
-                Latest News/Search Results:
+                UPCOMING EVENT:
+                - Estimate: {upcoming_est}
+                - Expected Date: {upcoming_date}
+                
+                RECENT FINANCIALS (Massive API):
+                - Revenue: {poly_data.get('revenues', {}).get('value', 'N/A')}
+                - Gross Profit: {poly_data.get('gross_profit', {}).get('value', 'N/A')}
+                - Net Income: {poly_data.get('net_income_loss', {}).get('value', 'N/A')}
+                
+                POLYMARKET SENTIMENT:
+                - Market YES Price (Winning Probability): {market_prob:.1%}
+                
+                LATEST NEWS/RESEARCH RESULTS:
                 {search_results}
                 
                 Task: 
                 1. Give a probability (0% to 100%) that they will beat the earnings EPS estimate.
-                2. Provide a concise reasoning summary (max 2-3 sentences).
+                2. Provide a concise reasoning summary (max 3-4 sentences). 
+                3. MUST include a "Bull Case" and "Bear Case" summary in your reasoning.
                 
                 Return exactly in this format:
                 PROBABILITY: XX%
-                REASONING: [Your reasoning]
+                REASONING: [Your reasoning with Bull/Bear breakdown]
                 """
                 
-                response = await asyncio.to_thread(self.agent.llm.invoke, prompt)
-                response_text = response.content if hasattr(response, "content") else str(response)
-                
-                # Parse probability
-                prob_match = re.search(r"PROBABILITY:\s*(\d+)%", response_text, re.IGNORECASE)
-                if prob_match:
-                    ai_prob = f"{prob_match.group(1)}%"
-                
-                # Parse reasoning
-                reasoning_match = re.search(r"REASONING:\s*(.*)", response_text, re.DOTALL | re.IGNORECASE)
-                if reasoning_match:
-                    ai_reasoning = reasoning_match.group(1).strip()
+                # Use self.agent.llm if available, otherwise fallback
+                llm = getattr(self.agent, 'llm', None)
+                if llm:
+                    response = await asyncio.to_thread(llm.invoke, prompt)
+                    response_text = response.content if hasattr(response, "content") else str(response)
+                    
+                    # Parse probability
+                    prob_match = re.search(r"PROBABILITY:\s*(\d+)%", response_text, re.IGNORECASE)
+                    if prob_match:
+                        ai_prob = f"{prob_match.group(1)}%"
+                    
+                    # Parse reasoning
+                    reasoning_match = re.search(r"REASONING:\s*(.*)", response_text, re.DOTALL | re.IGNORECASE)
+                    if reasoning_match:
+                        ai_reasoning = reasoning_match.group(1).strip()
+                else:
+                    ai_reasoning = "AI Research unavailable (LLM not configured)."
                 
                 web_tool.close()
             except Exception as e:

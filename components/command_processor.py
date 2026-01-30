@@ -209,21 +209,37 @@ class CommandProcessor:
                     return True, None
 
                 # Default to weather prediction
-                city = effective_args[0].title()
-                try:
-                    numdays = int(effective_args[1]) if len(effective_args) > 1 else 2
-                except ValueError:
-                    numdays = 2
+                # Robust parsing for poly:predict
+                args = effective_args.copy()
+                
+                # Check for Provider (VC/WC) at the end
+                provider = "VC"
+                if args and args[-1].upper() in ["VC", "WC", "TWC"]:
+                    provider = args.pop().upper()
+                    if provider == "TWC": provider = "WC"
+
+                # Check for NumDays at the end
+                numdays = 2
+                if args and args[-1].isdigit():
+                    numdays = int(args.pop())
+                
+                if not args:
+                    self.console.print("[red]Error: City name is required.[/red]")
+                    return True, None
+                
+                # Join remaining args as City
+                city_raw = " ".join(args).replace('"', '').replace("'", "")
+                city = city_raw.title() if city_raw.upper() not in ["NYC", "LA", "DC", "SF"] else city_raw.upper()
                 
                 # Determine date range for prediction (tomorrow onwards)
                 from datetime import datetime, timedelta
                 today = datetime.now()
                 target_date_obj = today + timedelta(days=numdays)
                 target_date = target_date_obj.strftime("%Y-%m-%d")
-                self.console.print(f"[bold cyan]Running Prediction for {city} (Next {numdays} days)...[/bold cyan]")
+                self.console.print(f"[bold cyan]Running Prediction for {city} (Next {numdays} days, Provider={provider})...[/bold cyan]")
                 
                 # Run prediction using same engine
-                await self._run_backtest_handler(city, target_date, numdays, is_prediction=True)
+                await self._run_backtest_handler(city, target_date, numdays, is_prediction=True, provider=provider)
                 return True, None
 
             elif effective_cmd == "poly:backtest" or effective_cmd == "poly:backtest2":
@@ -236,6 +252,12 @@ class CommandProcessor:
                 numdays = 7  # Default
                 args_to_parse = effective_args.copy()
                 
+                # Check for Provider (VC/WC) at the end
+                provider = "VC"
+                if args_to_parse and args_to_parse[-1].upper() in ["VC", "WC", "TWC"]:
+                    provider = args_to_parse.pop().upper()
+                    if provider == "TWC": provider = "WC"
+                
                 if args_to_parse and args_to_parse[-1].isdigit():
                     numdays = int(args_to_parse.pop())
                 
@@ -247,8 +269,8 @@ class CommandProcessor:
                 city = city_raw.title() if city_raw.upper() not in ["NYC", "LA", "DC", "SF"] else city_raw.upper()
                 
                 today = datetime.now().strftime("%Y-%m-%d")
-                self.console.print(f"[bold cyan]Running Cross-Sectional Backtest for {city} ({numdays} days)...[/bold cyan]")
-                await self._run_backtest_handler(city, today, numdays, v2_mode=True)
+                self.console.print(f"[bold cyan]Running Cross-Sectional Backtest for {city} ({numdays} days, Provider={provider})...[/bold cyan]")
+                await self._run_backtest_handler(city, today, numdays, v2_mode=True, provider=provider)
                 return True, None
 
             elif effective_cmd == "poly:buy":
@@ -389,8 +411,14 @@ class CommandProcessor:
                                     # Check conditionId, marketId, or slug match (basic market_id check)
                                     # API returns market_id as conditionId or marketId usually
                                     if p.get("market_id") == market_id or p.get("asset") == market_id:
-                                        side = p.get("outcome")
-                                        self.console.print(f"[dim]Found position: {side}[/dim]")
+                                        side = str(p.get("outcome", "")).upper()
+                                        size_held = float(p.get("size", 0))
+                                        self.console.print(f"[dim]Found position: {side} ({size_held} shares)[/dim]")
+                                        
+                                        # Validate Amount
+                                        if amount > size_held:
+                                            self.console.print(f"[yellow]Warning: You only hold {size_held} shares. Adjusting sell amount to {size_held}.[/yellow]")
+                                            amount = size_held
                                         break
                             
                             if not side:
@@ -404,7 +432,7 @@ class CommandProcessor:
                             found_sides = set()
                             for t in trades:
                                 if t["market_id"] == market_id and t["status"] == "OPEN":
-                                    found_sides.add(t.get("outcome", "YES"))
+                                    found_sides.add(str(t.get("outcome", "YES")).upper())
                             
                             if len(found_sides) == 1:
                                 side = list(found_sides)[0]
@@ -791,7 +819,7 @@ class CommandProcessor:
         
         self.console.print(Panel(summary, title="[bold]Real Portfolio Summary[/bold]", border_style="green"))
 
-    async def _run_backtest_handler(self, city: str, date: str, lookback_days: int = 7, is_prediction: bool = False, v2_mode: bool = False):
+    async def _run_backtest_handler(self, city: str, date: str, lookback_days: int = 7, is_prediction: bool = False, v2_mode: bool = False, provider: str = "VC"):
         """Async handler for running backtest to avoid blocking the CLI loop."""
         try:
             from utils.backtest_engine import BacktestEngine
@@ -808,18 +836,27 @@ class CommandProcessor:
                 from agent.tools.weather_tool import WeatherClient
                 tm_client = WeatherClient(api_key=tomorrow_key)
 
-            engine = BacktestEngine(pm_client, vc_client, tomorrow_client=tm_client)
+            # Initialize TWC Client
+            # Use provided key as fallback
+            twc_key = os.getenv("TWC_API_KEY")
+            twc_client = None
+            if twc_key:
+                from agent.tools.twc_weather_client import TwcWeatherClient
+                twc_client = TwcWeatherClient(api_key=twc_key)
+
+            engine = BacktestEngine(pm_client, vc_client, tomorrow_client=tm_client, twc_client=twc_client)
             
             if is_prediction:
-                print(f"Fetching forecast data for {city}...")
+                self.console.print(f"Fetching forecast data for {city} (Provider: {provider})...")
             
-            result = await engine.run_backtest(city, date, lookback_days, is_prediction=is_prediction, v2_mode=v2_mode)
-            
+            result = await engine.run_backtest(city, date, lookback_days, is_prediction=is_prediction, v2_mode=v2_mode, provider=provider)
+
             if not result.get("success"):
                 self.console.print(f"\n[red]Backtest Failed: {result.get('error')}[/red]")
                 await pm_client.close()
                 await vc_client.close()
                 if tm_client: await tm_client.close()
+                if twc_client: await twc_client.close()
                 return
 
             # Display Trade Details Table
@@ -831,6 +868,7 @@ class CommandProcessor:
                 trade_table.add_column("Date", style="dim", width=7)
                 trade_table.add_column("Target", justify="center")
                 trade_table.add_column("VC-Fcst", justify="center", style="magenta", no_wrap=True)
+                trade_table.add_column("WC-Fcst", justify="center", style="dim cyan", no_wrap=True)
                 if is_prediction:
                     trade_table.add_column("TM-Fcst", justify="center", style="dim magenta", no_wrap=True)
                 trade_table.add_column("Actual", justify="center", style="blue", no_wrap=True)
@@ -865,12 +903,13 @@ class CommandProcessor:
                     row_data = [
                         date_display,
                         t.get("target_display", f"{t['bucket']} ({t['target_f']}°F)"),
-                        fmt_temp(t.get('forecast')),
+                        fmt_temp(t.get('forecast')), # VC-Fcst
+                        fmt_temp(t.get('forecast_twc')), # WC-Fcst
                     ]
                     if is_prediction:
-                        row_data.append(fmt_temp(t.get('forecast_secondary')))
+                        row_data.append(fmt_temp(t.get('forecast_secondary'))) # TM-Fcst
                     
-                    row_data.append(fmt_temp(t.get('actual')))
+                    row_data.append(fmt_temp(t.get('actual'))) # Actual
                     
                     if is_prediction or v2_mode:
                         row_data.append(str(t.get("market_id", "N/A")))
@@ -1549,8 +1588,8 @@ class CommandProcessor:
         table.add_row("news (ticker)", "Direct news lookup (xAI/Grok)", "Instant")
         table.add_row("financials (ticker)", "Direct financials lookup (Massive)", "Instant")
         table.add_row("quote (ticker)", "Real-time quote data", "Instant")
-        table.add_row("poly:backtest (city) (numdays)", "Cross-Sectional YES/NO Backtest", "5-10s")
-        table.add_row("poly:predict (city) (numdays)", "Multi-day Highest-Prob Prediction", "5-10s")
+        table.add_row("poly:backtest (city) (days) [prov]", "Cross-Sectional Backtest (VC/WC/TWC)", "5-10s")
+        table.add_row("poly:predict (city) (days) [prov]", "Multi-day Prediction (VC/WC/TWC)", "5-10s")
         table.add_row("poly:predict earnings (ticker/days) (lookback)", "Compare YF Beat Rate vs Polymarket Price", "3-5s")
         table.add_row("poly:weather (city)", "Scan for weather opportunities or search by city", "Instant")
         table.add_row("poly:buy (paper/real) (amt) (id) (side)", "Buy YES/NO shares (Default: Paper, YES)", "~2s")

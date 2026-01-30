@@ -82,7 +82,9 @@ class VisualCrossingClient:
             
             return {
                 "days": data.get("days", []),
-                "forecast_time": retrieval_time
+                "forecast_time": retrieval_time,
+                "latitude": data.get("latitude"),
+                "longitude": data.get("longitude")
             }
         
         logger.error("Exhausted all retries for Visual Crossing API")
@@ -105,4 +107,6 @@ class VisualCrossingClient:
             
         day_data = days[0]
         day_data["forecast_time"] = res.get("forecast_time")
+        day_data["latitude"] = res.get("latitude")
+        day_data["longitude"] = res.get("longitude")
         return day_data

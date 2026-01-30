@@ -1,10 +1,12 @@
 """Polymarket API client for fetching market data and weather conditions."""
 import httpx
 import json
-from typing import Optional, List, Dict, Any
+import logging
+import os
+from typing import Dict, Any, List, Optional
+from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -614,11 +616,20 @@ class PolymarketClient:
             except:
                 clob_token_ids = []
 
+        outcomes = data.get("outcomes")
+        if isinstance(outcomes, str) and outcomes.strip():
+            try:
+                outcomes = json.loads(outcomes)
+            except:
+                outcomes = ["Yes", "No"]
+        if not outcomes:
+            outcomes = ["Yes", "No"]
+
         return PolymarketMarket(
             id=data.get("id", ""),
             question=data.get("question", ""),
             description=data.get("description", ""),
-            outcomes=data.get("outcomes", ["Yes", "No"]),
+            outcomes=outcomes,
             yes_price=yes_price,
             no_price=no_price,
             liquidity=float(data.get("liquidity", 0)),

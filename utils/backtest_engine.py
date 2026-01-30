@@ -26,12 +26,14 @@ class BacktestEngine:
         polymarket_client: PolymarketClient,
         weather_client: VisualCrossingClient,
         tomorrow_client: Optional[Any] = None,
+        twc_client: Optional[Any] = None,
         strategy_params: Optional[Dict[str, Any]] = None
     ):
         """Initialize the backtest engine."""
         self.pm_client = polymarket_client
         self.vc_client = weather_client
         self.tm_client = tomorrow_client
+        self.twc_client = twc_client
         self.strategy = TradingStrategy(**(strategy_params or {}))
 
     async def _get_weather_data(self, city: str, date_str: str) -> Optional[Dict[str, Any]]:
@@ -45,7 +47,8 @@ class BacktestEngine:
         target_date: str,
         lookback_days: int = 7,
         is_prediction: bool = False,
-        v2_mode: bool = False
+        v2_mode: bool = False,
+        provider: str = "VC"
     ) -> Dict[str, Any]:
         """Run a cross-sectional backtest for a specific city and date range."""
         total_invested = 0
@@ -207,32 +210,62 @@ class BacktestEngine:
             weather_error = None
 
             # Always attempt to fetch weather (handles both historical and forecast)
+            # Primary Provider Selection
+            primary_source = provider.upper() # VC or WC
+            
             secondary_weather = None
+            twc_weather = None
+            vc_weather = None
+            
             try:
-                # Primary weather: ALWAYS Visual Crossing for calculations
-                actual_weather = await self._get_weather_data(weather_city, current_date)
+                # 1. Fetch VC Data (Needed for coordinates usually, or if it's primary)
+                if self.vc_client:
+                    vc_weather = await self.vc_client.get_day_weather(weather_city, current_date)
+
+                # 2. Fetch TWC Data
+                # We need coordinates. If VC found them, use them. Else try overrides.
+                lat, lon = None, None
+                c_up = city.upper()
+                if c_up in ["NYC", "NEW YORK", "NEW YORK CITY"]: lat, lon = 40.7769, -73.8740
+                elif c_up in ["LONDON"]: lat, lon = 51.5032, 0.0518
+                elif c_up in ["SEOUL"]: lat, lon = 37.4602, 126.4407
+                elif c_up in ["ANKARA"]: lat, lon = 40.1281, 32.9951
                 
-                # Secondary weather: Tomorrow.io for "Double Check" during predictions
+                if (lat is None) and vc_weather and "latitude" in vc_weather:
+                    lat = vc_weather.get("latitude")
+                    lon = vc_weather.get("longitude")
+                
+                if self.twc_client and lat is not None and lon is not None:
+                    try:
+                        twc_weather = await self.twc_client.get_day_weather(lat, lon, current_date)
+                    except Exception as e:
+                        print(f"TWC Error: {e}")
+
+                # 3. Fetch Tomorrow.io (Secondary check)
                 if is_prediction and self.tm_client:
-                    if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
-                        print(f"DEBUG: [Tomorrow.io] Fetching secondary forecast for {current_date}")
-                    secondary_weather = await self.tm_client.get_day_weather(weather_city, current_date)
+                     secondary_weather = await self.tm_client.get_day_weather(weather_city, current_date)
+
+                # Decide which is 'actual_weather' for calculations
+                if primary_source == "WC":
+                    if not twc_weather:
+                        if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+                            print(f"DEBUG: TWC (Primary) missing for {current_date}, skipping.")
+                        continue
+                    actual_weather = twc_weather
+                else:
+                    # Default to VC
+                    if not vc_weather:
+                        if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+                            print(f"DEBUG: VC (Primary) missing for {current_date}, skipping.")
+                        continue
+                    actual_weather = vc_weather
+                    
             except Exception as e:
                 print(f"Weather API Error for {current_date}: {e}")
                 weather_error = str(e)
 
             # If we missed weather data for a historical date, we can't probability-check reliably
             if is_historical and not actual_weather:
-                if weather_error and "401" in weather_error:
-                    # Return partial results found so far + Error
-                    return {
-                        "city": city,
-                        "success": False, 
-                        "error": "Visual Crossing API Quota Exceeded (401). Partial results shown.",
-                        "trades": all_trades,
-                        "markets_found": markets_found_total,
-                        "markets_processed": markets_processed_total
-                    }
                 continue
 
             # 4. Collect Market Data and Identify Best Entry (Start of Day)
@@ -487,6 +520,8 @@ class BacktestEngine:
                     "Market Resolution Date": resolution_time.strftime("%Y-%m-%d %H:%M"),
                     "Forecast Max Temp (F)": round(actual_weather.get("tempmax", 0), 1), 
                     "Forecast Update Time": actual_weather.get("forecast_time", "N/A"),
+                    "VC-Fcst (F)": round(vc_weather.get("tempmax"), 1) if vc_weather else "N/A",
+                    "WC-Fcst (F)": round(twc_weather.get("tempmax"), 1) if twc_weather else "N/A",
                     "Actual Max Temp (F)": round(actual_weather["tempmax"], 1) if not is_future else "PENDING",
                     "Target Fahrenheit": round(threshold_info.get("value"), 1),
                     "Predicted Probability": f"{int(csv_prob * 100)}% ({round(csv_prob, 2)})",
@@ -541,7 +576,8 @@ class BacktestEngine:
                         "Side": trade_side or "NONE",
                         "target_f": round(threshold_info.get("value"), 0),
                         "target_display": f"{bucket_label} ({round(threshold_info.get('value'), 1)}°F)",
-                        "forecast": round(actual_weather.get("tempmax", 0), 1),
+                        "target_display": f"{bucket_label} ({round(threshold_info.get('value'), 1)}°F)",
+                        "forecast": round(vc_weather.get("tempmax", 0), 1) if vc_weather else "N/A",
                         "forecast_time": actual_weather.get("forecast_time", "N/A"),
                         "actual": actual_display,
                         "prob": f"{int(dis_prob * 100)}%",
@@ -549,7 +585,9 @@ class BacktestEngine:
                         "price": round(trade_price, 3) if trade_side else round(price, 3),
                         "countdown": entry_data.get("countdown", "N/A"),
                         "result": res_str,
-                        "forecast_secondary": round(secondary_weather.get("tempmax", 0), 1) if secondary_weather else "N/A"
+                        "result": res_str,
+                        "forecast_secondary": round(secondary_weather.get("tempmax", 0), 1) if secondary_weather else "N/A",
+                        "forecast_twc": round(twc_weather.get("tempmax"), 1) if twc_weather else "N/A"
                     })
 
                     # Track equity after each day (simplified: one trade per day usually)
@@ -640,53 +678,110 @@ class BacktestEngine:
         if unit == 'C':
             f_val = (val * 9/5) + 32
             return {"value": f_val, "unit": "F", "original": val, "original_unit": "C"}
-        return {"value": val, "unit": "F"}
+        return {"value": val, "unit": "F", "original": val, "original_unit": "F"}
 
     def _calculate_probabilities(self, weather: Dict[str, Any], question: str) -> Dict[str, float]:
         """Heuristic for fair price based on observed weather."""
         threshold_info = self._parse_threshold(question)
-        target_val = threshold_info["value"] 
-        actual_val = weather.get("tempmax", 0) 
-        diff = actual_val - target_val
+        
+        # Determine Resolution Unit and Target
+        res_unit = threshold_info.get("original_unit", "F")
+        target_val = threshold_info.get("original", threshold_info["value"])
+        
+        # Get Actual Weather (Source is typically F)
+        actual_val_f = weather.get("tempmax", 0)
+        
+        # Convert Actual to Resolution Unit
+        if res_unit == 'C':
+            actual_val_res = (actual_val_f - 32) * 5/9
+        else:
+            actual_val_res = actual_val_f
+            
+        # ROUND to nearest integer (Standard Rounding)
+        # Python round(): round(x) returns the nearest integer. If two integers are equally close, rounding is done toward the even choice.
+        # But typical weather resolution is standard rounding (0.5 rounds up).
+        # Let's enforce standard rounding for consistency with resolution sources (usually).
+        import math
+        def standard_round(x):
+            return int(x + 0.5) if x >= 0 else int(x - 0.5)
+            
+        actual_val_rounded = standard_round(actual_val_res)
+        
+        diff = actual_val_rounded - target_val
         
         is_above = "or higher" in question.lower() or "exceed" in question.lower() or "above" in question.lower()
         is_below = "or below" in question.lower() or "below" in question.lower() or "less than" in question.lower()
         is_discrete = not (is_above or is_below)
 
+        # Probabilities logic remains similar but operates on the rounded diff in the correct unit
+        # Note: thresholds on previous logic were tuned for F. 
+        # C degrees are larger (~1.8x F). so we should scale sensitivity if unit is C?
+        # Actually simplest to re-normalize diff to F for the heuristic PROBABILITY curve, 
+        # but the HARD CUTOFFS must use the rounded value.
+        
+        # Re-convert diff to F for the probability heuristic ONLY (to keep the curve consistent)
+        diff_f = diff * 1.8 if res_unit == 'C' else diff
+
         if is_discrete:
-            abs_diff = abs(diff)
+            abs_diff = abs(diff_f)
             if abs_diff < 0.5: prob = 0.90
             elif abs_diff < 1.0: prob = 0.70
             elif abs_diff < 1.5: prob = 0.30
             elif abs_diff < 2.0: prob = 0.10
             else: prob = 0.02
         elif is_below:
-            if diff < -1.5: prob = 0.98
-            elif diff > 1.5: prob = 0.02
-            else: prob = 0.5 - (diff / 2.5) # Window of 1.25 degrees each side
+             # If target is 10C. Actual 9.4 -> 9C. Diff -1. Below 10? Yes.
+             # If target is 10C. Actual 10.4 -> 10C. Diff 0. Below 10? No (unless 'or below')
+             if diff_f < -0.5: prob = 0.98 # Definitely below
+             elif diff_f > 0.5: prob = 0.02 # Definitely above
+             else: prob = 0.5 # On the line
         else: # is_above
-            if diff > 1.5: prob = 0.98
-            elif diff < -1.5: prob = 0.02
-            else: prob = 0.5 + (diff / 2.5)
+             if diff_f > 0.5: prob = 0.98
+             elif diff_f < -0.5: prob = 0.02
+             else: prob = 0.5
         
         # Ensure bounds
         prob = max(0.01, min(0.99, prob))
 
-        return {"probability": prob, "threshold_f": target_val, "actual_f": actual_val}
+        return {"probability": prob, "threshold_f": threshold_info["value"], "actual_f": actual_val_f}
 
     def _determine_resolution(self, weather: Dict[str, Any], question: str) -> float:
         """Determine if the YES token resolved to 1.0 or 0.0."""
         threshold_info = self._parse_threshold(question)
-        target_f = threshold_info["value"]
-        actual_f = weather.get("tempmax", 0)
+        
+        # Resolution uses ONLY the rounded values in the resolution unit
+        res_unit = threshold_info.get("original_unit", "F")
+        target_val = threshold_info.get("original", threshold_info["value"])
+        
+        actual_val_f = weather.get("tempmax", 0)
+        
+        if res_unit == 'C':
+            actual_val_res = (actual_val_f - 32) * 5/9
+        else:
+            actual_val_res = actual_val_f
+            
+        def standard_round(x):
+            return int(x + 0.5) if x >= 0 else int(x - 0.5)
+
+        actual_val_rounded = standard_round(actual_val_res)
         
         is_above = "or higher" in question.lower() or "exceed" in question.lower() or "above" in question.lower()
         is_below = "or below" in question.lower() or "below" in question.lower() or "less than" in question.lower()
         is_discrete = not (is_above or is_below)
         
         if is_discrete:
-            return 1.0 if abs(actual_f - target_f) < 1.1 else 0.0
+            # Discrete: Must EQUAL the whole number
+            return 1.0 if actual_val_rounded == target_val else 0.0
         elif is_below:
-            return 1.0 if actual_f <= (target_f + 0.1) else 0.0
+            # Below 10C means < 10. "10 or below" means <= 10.
+            # Most weather markets are ranges "Below 10". If 10, No. If 9, Yes.
+            # BUT: Polymarket wording varies. "Will... be 10C or higher?"
+            # Standard: "Be below X" -> < X. "Be X or below" -> <= X.
+            if "or below" in question.lower():
+                return 1.0 if actual_val_rounded <= target_val else 0.0
+            return 1.0 if actual_val_rounded < target_val else 0.0
         else: # is_above
-            return 1.0 if actual_f >= (target_f - 0.1) else 0.0
+            if "or higher" in question.lower() or "exceed" not in question.lower():
+                 # "11C or higher" -> >= 11
+                 return 1.0 if actual_val_rounded >= target_val else 0.0
+            return 1.0 if actual_val_rounded > target_val else 0.0

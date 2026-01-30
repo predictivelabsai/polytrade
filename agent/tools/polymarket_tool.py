@@ -174,13 +174,13 @@ class PolymarketClient:
                 resp = await self.client.get(url)
                 if resp.status_code == 200:
                     raw_positions = resp.json()
-                    for rp in raw_positions:
-                        # Try to resolve short ID from slug if available
-                        short_id = None
+                    
+                    # Prepare concurrent fetching for slugs
+                    async def resolve_slug(rp):
                         slug = rp.get("slug")
+                        short_id = None
                         if slug:
                             try:
-                                # Quick lookup via Gamma API
                                 res = await self.client.get(f"{self.BASE_URL}/markets?slug={slug}")
                                 if res.status_code == 200:
                                     m_data = res.json()
@@ -190,10 +190,15 @@ class PolymarketClient:
                                         short_id = m_data.get("id")
                             except:
                                 pass
+                        return {**rp, "resolved_market_id": short_id}
 
+                    import asyncio
+                    results = await asyncio.gather(*[resolve_slug(rp) for rp in raw_positions])
+                    
+                    for rp in results:
                         positions.append({
                             "asset": rp.get("asset"), # Token ID
-                            "market_id": short_id or rp.get("conditionId") or rp.get("marketId"), # Prefer integer ID
+                            "market_id": rp.get("resolved_market_id") or rp.get("conditionId") or rp.get("marketId"), # Prefer resolved ID
                             "market": rp.get("title"), # Question
                             "outcome": rp.get("outcome"),
                             "size": float(rp.get("size", 0)),

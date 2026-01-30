@@ -260,18 +260,20 @@ class CommandProcessor:
                     args_to_use = effective_args[1:]
 
                 if len(args_to_use) < 2:
-                    self.console.print(f"[red]Error: Usage: poly:buy (paper/real) (amount) (market_id)[/red]")
+                    self.console.print(f"[red]Error: Usage: poly:buy (paper/real) (amount) (market_id) (YES/NO)[/red]")
                     return True, None
                 
                 try:
                     amount = float(args_to_use[0])
                     market_id = args_to_use[1]
+                    side = args_to_use[2].upper() if len(args_to_use) > 2 else "YES"
                 except ValueError:
                     self.console.print("[red]Error: Amount must be a number.[/red]")
                     return True, None
 
                 if mode == "real":
-                    self.console.print(f"[bold green]Executing REAL Buy: ${amount:.2f} on {market_id}...[/bold green]")
+                    side_color = "green" if side == "YES" else "red"
+                    self.console.print(f"[bold green]Executing REAL Buy: ${amount:.2f} of [bold {side_color}]{side}[/bold {side_color}] on {market_id}...[/bold green]")
                     
                     if not self._pm_client_cache:
                         from agent.tools.polymarket_tool import get_polymarket_client
@@ -280,20 +282,37 @@ class CommandProcessor:
                     # Check if this is a Gamma ID (short) or Token ID (long)
                     token_id = market_id
                     if len(market_id) < 20: 
-                        # Likely a Gamma ID, resolve it
-                        self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID...[/dim]")
+                        # Likely a Gamma ID, resolve it to the CORRECT token ID based on side
+                        # Index 0 = YES, Index 1 = NO (usually)
+                        side_color_dim = "green" if side == "YES" else "red"
+                        self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID for [/dim][{side_color_dim}]{side}[/{side_color_dim}]...")
                         market = await self._pm_client_cache.get_market_by_id(market_id)
                         if not market or not market.clob_token_ids:
                             self.console.print(f"[bold red]Error:[/bold red] Could not resolve market ID {market_id} to tokens.")
                             return True, None
-                        token_id = market.clob_token_ids[0] # Use YES token
-                        self.console.print(f"[dim]Resolved to YES Token: {token_id[:10]}...[/dim]")
+                        
+                        # Map side to index
+                        idx = -1
+                        m_outcomes = [o.upper() for o in market.outcomes]
+                        if side in m_outcomes:
+                            idx = m_outcomes.index(side)
+                        elif side == "YES": idx = 0
+                        elif side == "NO": idx = 1
+                        
+                        if idx < 0 or idx >= len(market.clob_token_ids):
+                            self.console.print(f"[bold red]Error:[/bold red] Could not resolve side '{side}' to a valid token index.")
+                            self.console.print(f"[dim]Available outcomes: {', '.join(market.outcomes)}[/dim]")
+                            return True, None
+                        
+                        token_id = market.clob_token_ids[idx]
+                        display_side = market.outcomes[idx] if idx < len(market.outcomes) else side
+                        self.console.print(f"[dim]Resolved to \"{display_side}\" Token: {token_id[:10]}...[/dim]")
 
                     result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id)
                     self._display_data("Real Trade Execution", result)
                 else:
                     # Paper buy
-                    self.console.print(f"Fetching current price for [yellow]{market_id}[/yellow]...")
+                    self.console.print(f"Fetching current price for [yellow]{market_id}[/yellow] ({side})...")
                     if not self._pm_client_cache:
                         from agent.tools.polymarket_tool import get_polymarket_client
                         self._pm_client_cache = await get_polymarket_client()
@@ -305,14 +324,32 @@ class CommandProcessor:
                         return True, None
                     
                     # Market is a PolymarketMarket object
-                    price = market.yes_price
+                    # For paper trades, we need to map the outcome name to a price
+                    m_outcomes_up = [o.upper() for o in market.outcomes]
+                    price = -1
+                    actual_outcome = side
+                    
+                    if side in m_outcomes_up:
+                        idx = m_outcomes_up.index(side)
+                        actual_outcome = market.outcomes[idx]
+                        if idx == 0: price = market.yes_price
+                        elif idx == 1: price = market.no_price
+                        else:
+                            price = 0.5 # Fallback
+                    elif side == "YES":
+                        price = market.yes_price
+                        actual_outcome = "YES"
+                    elif side == "NO":
+                        price = market.no_price
+                        actual_outcome = "NO"
+                        
                     if price <= 0:
-                        self.console.print("[red]Error: Market has no valid price.[/red]")
+                        self.console.print(f"[red]Error: Market has no valid price for side '{side}'.[/red]")
                         return True, None
                     
-                    trade = self.portfolio.add_trade(market_id, market.question, amount, price)
+                    trade = self.portfolio.add_trade(market_id, market.question, amount, price, outcome=actual_outcome)
                     self.console.print(Panel(
-                        f"Market: {market.question}\nEntry Price: [bold]${price:.3f}[/bold]\nAmount: [green]${amount:.2f}[/green]\nShares: [cyan]{trade['shares']:.2f}[/cyan]",
+                        f"Market: {market.question}\nSide: [bold cyan]{actual_outcome}[/bold cyan]\nEntry Price: [bold]${price:.3f}[/bold]\nAmount: [green]${amount:.2f}[/green]\nShares: [cyan]{trade['shares']:.2f}[/cyan]",
                         title="[bold green]Paper Trade Executed[/bold green]",
                         border_style="green"
                     ))
@@ -326,23 +363,66 @@ class CommandProcessor:
                     mode = effective_args[0].lower()
                     args_to_use = effective_args[1:]
 
-                if len(args_to_use) < 1:
-                    self.console.print(f"[red]Error: Usage: poly:sell (paper/real) (id/amount) (market_id)[/red]")
+                if len(args_to_use) < 2:
+                    self.console.print(f"[red]Error: Usage: poly:sell (paper/real) (amount) (market_id) (YES/NO)[/red]")
+                    return True, None
+
+                try:
+                    amount = float(args_to_use[0])
+                    market_id = args_to_use[1]
+                    
+                    # Auto-detect side if not provided
+                    side = None
+                    if len(args_to_use) > 2:
+                        side = args_to_use[2].upper()
+                    else:
+                        self.console.print(f"[dim]Auto-detecting side for {market_id}...[/dim]")
+                        if mode == "real":
+                            # Fetch real portfolio to find side
+                            if not self._pm_client_cache:
+                                from agent.tools.polymarket_tool import get_polymarket_client
+                                self._pm_client_cache = await get_polymarket_client()
+                            
+                            pf = await self._pm_client_cache.get_portfolio()
+                            if "positions" in pf:
+                                for p in pf["positions"]:
+                                    # Check conditionId, marketId, or slug match (basic market_id check)
+                                    # API returns market_id as conditionId or marketId usually
+                                    if p.get("market_id") == market_id or p.get("asset") == market_id:
+                                        side = p.get("outcome")
+                                        self.console.print(f"[dim]Found position: {side}[/dim]")
+                                        break
+                            
+                            if not side:
+                                self.console.print(f"[red]Error: Could not find open position for {market_id} to auto-detect side.[/red]")
+                                return True, None
+                        else:
+                            # Paper mode
+                            trades = self.portfolio.get_trades()
+                            # Find open trades for this market
+                            # Market ID might match trade['market_id'] exactly
+                            found_sides = set()
+                            for t in trades:
+                                if t["market_id"] == market_id and t["status"] == "OPEN":
+                                    found_sides.add(t.get("outcome", "YES"))
+                            
+                            if len(found_sides) == 1:
+                                side = list(found_sides)[0]
+                                self.console.print(f"[dim]Found open paper position: {side}[/dim]")
+                            elif len(found_sides) > 1:
+                                self.console.print(f"[red]Error: You have both YES and NO positions. Please specify side explicitly.[/red]")
+                                return True, None
+                            else:
+                                self.console.print(f"[red]Error: No open paper positions found for {market_id}.[/red]")
+                                return True, None
+                                
+                except ValueError:
+                    self.console.print("[red]Error: Amount must be a number.[/red]")
                     return True, None
 
                 if mode == "real":
-                    if len(args_to_use) < 2:
-                        self.console.print("[red]Error: Usage: poly:sell real <amount> <market_id>[/red]")
-                        return True, None
-                    
-                    try:
-                        amount = float(args_to_use[0])
-                        market_id = args_to_use[1]
-                    except ValueError:
-                        self.console.print("[red]Error: Amount must be a number.[/red]")
-                        return True, None
-                    
-                    self.console.print(f"[bold red]Executing REAL Sell: {amount} shares on {market_id}...[/bold red]")
+                    side_color = "green" if side == "YES" else "red"
+                    self.console.print(f"[bold red]Executing REAL Sell: {amount} shares of [bold {side_color}]{side}[/bold {side_color}] on {market_id}...[/bold red]")
                     
                     if not self._pm_client_cache:
                         from agent.tools.polymarket_tool import get_polymarket_client
@@ -352,63 +432,71 @@ class CommandProcessor:
                     token_id = market_id
                     if len(market_id) < 20: 
                         # Likely a Gamma ID, resolve it
-                        self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID...[/dim]")
+                        side_color_dim = "green" if side == "YES" else "red"
+                        self.console.print(f"[dim]Resolving Gamma ID {market_id} to CLOB Token ID for [/dim][{side_color_dim}]{side}[/{side_color_dim}]...")
                         market = await self._pm_client_cache.get_market_by_id(market_id)
                         if not market or not market.clob_token_ids:
                             self.console.print(f"[bold red]Error:[/bold red] Could not resolve market ID {market_id} to tokens.")
                             return True, None
-                        token_id = market.clob_token_ids[0] # Use YES token
-                        self.console.print(f"[dim]Resolved to YES Token: {token_id[:10]}...[/dim]")
+                        
+                        # We need to know which token to sell
+                        idx = -1
+                        m_outcomes = [o.upper() for o in market.outcomes]
+                        if side in m_outcomes:
+                            idx = m_outcomes.index(side)
+                        elif side == "YES": idx = 0
+                        elif side == "NO": idx = 1
+
+                        if idx < 0 or idx >= len(market.clob_token_ids):
+                            self.console.print(f"[bold red]Error:[/bold red] Could not resolve side '{side}' to a valid token index.")
+                            return True, None
+                            
+                        token_id = market.clob_token_ids[idx]
+                        display_side = market.outcomes[idx] if idx < len(market.outcomes) else side
+                        self.console.print(f"[dim]Resolved to \"{display_side}\" Token: {token_id[:10]}...[/dim]")
 
                     result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id, side="SELL")
                     self._display_data("Real Trade Execution (SELL)", result)
                 else:
                     # Paper sell
-                    trade_id = args_to_use[0]
+                    # New Logic: Close trades by Market ID + Side using FIFO
                     
-                    # Check if trade exists and is open
-                    trades = self.portfolio.get_trades()
-                    target_trade = None
-                    for t in trades:
-                        if t["id"] == trade_id or t["id"].endswith(trade_id):
-                            if t["status"] == "OPEN":
-                                target_trade = t
-                                break
-                            else:
-                                self.console.print(f"[yellow]Trade {trade_id} is already SOLD.[/yellow]")
-                                return True, None
-                    
-                    if not target_trade:
-                        self.console.print(f"[red]Error: Open trade with ID {trade_id} not found.[/red]")
-                        return True, None
-                    
-                    self.console.print(f"Closing trade {trade_id} at current market price...")
+                    self.console.print(f"Closing {amount} shares of [yellow]{market_id}[/yellow] ({side})...")
                     if not self._pm_client_cache:
                         from agent.tools.polymarket_tool import get_polymarket_client
                         self._pm_client_cache = await get_polymarket_client()
                     
-                    market = await self._pm_client_cache.get_market_by_id(target_trade["market_id"])
+                    market = await self._pm_client_cache.get_market_by_id(market_id)
                     if not market:
                         self.console.print("[red]Error: Could not fetch current market price to close trade.[/red]")
                         return True, None
                     
-                    exit_price = market.yes_price
-                    closed_trade = self.portfolio.close_trade_by_id(trade_id, exit_price)
+                    # Determine Exit Price
+                    exit_price = 0.5
+                    m_outcomes_up = [o.upper() for o in market.outcomes]
+                    if side in m_outcomes_up:
+                        idx = m_outcomes_up.index(side)
+                        if idx == 0: exit_price = market.yes_price
+                        elif idx == 1: exit_price = market.no_price
+                    elif side == "YES":
+                         exit_price = market.yes_price
+                    elif side == "NO":
+                         exit_price = market.no_price
+
+                    closed_trades = self.portfolio.sell_shares(market_id, side, amount, exit_price)
                     
-                    if closed_trade:
-                        pnl = closed_trade["payout"] - closed_trade["amount"]
-                        pnl_perc = (pnl / closed_trade["amount"] * 100) if closed_trade["amount"] > 0 else 0
-                        pnl_color = "green" if pnl >= 0 else "red"
+                    if not closed_trades:
+                         self.console.print(f"[red]Error: No open positions found for {market_id} ({side}).[/red]")
+                    else:
+                        total_payout = sum(t['payout'] for t in closed_trades)
                         
                         self.console.print(Panel(
-                            f"Market: {closed_trade['question']}\n"
-                            f"Exit Price: [bold]${exit_price:.3f}[/bold]\n"
-                            f"Payout: [green]${closed_trade['payout']:.2f}[/green]\n"
-                            f"PnL: [{pnl_color}]${pnl:+.2f} ({pnl_perc:+.2f}%)[/{pnl_color}]",
-                            title="[bold yellow]Paper Trade SOLD[/bold yellow]",
-                            border_style="yellow"
+                            f"Market: {market.question}\nSide: [bold cyan]{side}[/bold cyan]\nActions: {len(closed_trades)} trade(s) processed\nExit Price: [bold]${exit_price:.3f}[/bold]\nTotal Payout: [green]${total_payout:.2f}[/green]",
+                            title="[bold green]Paper Sell Executed[/bold green]",
+                            border_style="green"
                         ))
                 return True, None
+
             
             else:
                 self.console.print(f"[red]Unknown Polymarket command: {effective_cmd}[/red]")
@@ -855,6 +943,7 @@ class CommandProcessor:
         table = Table(title="Paper Trading Portfolio", header_style="bold magenta")
         table.add_column("ID", style="dim", width=10)
         table.add_column("Market", ratio=4)
+        table.add_column("Side", justify="center")
         table.add_column("Entry", justify="right")
         table.add_column("Curr", justify="right")
         table.add_column("PnL", justify="right")
@@ -880,7 +969,7 @@ class CommandProcessor:
                 
                 market = await self._pm_client_cache.get_market_by_id(market_id)
                 if market:
-                    current_price = market.yes_price
+                    current_price = market.yes_price if t.get("outcome", "YES") == "YES" else market.no_price
                 status_display = "[yellow]OPEN[/yellow]"
             else:
                 current_price = t.get("exit_price") or (1.0 if t["payout"] > 0 else 0.0)
@@ -897,6 +986,7 @@ class CommandProcessor:
             table.add_row(
                 t["id"][-6:], # Only show last 6 chars of ID
                 t["question"],
+                f"[bold]{t.get('outcome', 'YES')}[/bold]",
                 f"${entry_price:.3f}",
                 f"${current_price:.3f}",
                 f"[{pnl_color}]${pnl:+.2f} ({pnl_perc:+.1f}%)[/{pnl_color}]",
@@ -1461,10 +1551,10 @@ class CommandProcessor:
         table.add_row("quote (ticker)", "Real-time quote data", "Instant")
         table.add_row("poly:backtest (city) (numdays)", "Cross-Sectional YES/NO Backtest", "5-10s")
         table.add_row("poly:predict (city) (numdays)", "Multi-day Highest-Prob Prediction", "5-10s")
-        table.add_row("poly:predict earnings (ticker) (days) (lookback)", "Compare YF Beat Rate vs Polymarket Price", "3-5s")
+        table.add_row("poly:predict earnings (ticker/days) (lookback)", "Compare YF Beat Rate vs Polymarket Price", "3-5s")
         table.add_row("poly:weather (city)", "Scan for weather opportunities or search by city", "Instant")
-        table.add_row("poly:buy (paper/real) (amt) (id)", "Buy YES shares (Default: Paper)", "~2s")
-        table.add_row("poly:sell (paper/real) (id/amt) (id)", "Sell shares (Default: Paper)", "~2s")
+        table.add_row("poly:buy (paper/real) (amt) (id) (side)", "Buy YES/NO shares (Default: Paper, YES)", "~2s")
+        table.add_row("poly:sell (paper/real) (amt) (id) [side]", "Sell shares by Market ID (Side optional)", "~2s")
         table.add_row("poly:portfolio (paper/real)", "View positions (Default: Real)", "Instant")
         table.add_row("reset, r, ..", "Reset context/ticker", "-")
         table.add_row("help, h, ?", "Displays this menu", "-")

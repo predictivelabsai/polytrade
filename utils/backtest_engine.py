@@ -219,8 +219,16 @@ class BacktestEngine:
             
             try:
                 # 1. Fetch VC Data (Needed for coordinates usually, or if it's primary)
+                # Override weather_city for VC too if it matches our special list
+                vc_search_loc = weather_city
+                c_up = city.upper()
+                if c_up in ["NYC", "NEW YORK", "NEW YORK CITY"]: vc_search_loc = "40.7769,-73.8740"
+                elif c_up in ["LONDON"]: vc_search_loc = "51.5032,0.0518"
+                elif c_up in ["SEOUL"]: vc_search_loc = "37.4602,126.4407"
+                elif c_up in ["ANKARA"]: vc_search_loc = "40.1281,32.9951"
+
                 if self.vc_client:
-                    vc_weather = await self.vc_client.get_day_weather(weather_city, current_date)
+                    vc_weather = await self.vc_client.get_day_weather(vc_search_loc, current_date)
 
                 # 2. Fetch TWC Data
                 # We need coordinates. If VC found them, use them. Else try overrides.
@@ -305,6 +313,7 @@ class BacktestEngine:
                             min_diff = diff
                             closest = h
                     
+                    countdown = "N/A"
                     if is_prediction:
                         # Calculate countdown
                         if market.end_date:
@@ -329,8 +338,6 @@ class BacktestEngine:
                                 countdown = "N/A"
                         else:
                             countdown = "N/A"
-                    else:
-                        countdown = "N/A"
 
                     if is_prediction and current_date == datetime.now().strftime("%Y-%m-%d"):
                         # Use live price for today's prediction

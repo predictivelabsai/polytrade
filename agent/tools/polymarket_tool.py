@@ -43,8 +43,10 @@ class PolymarketClient:
     """Client for interacting with Polymarket API."""
 
     BASE_URL = "https://gamma-api.polymarket.com"
+    BASE_URL = "https://gamma-api.polymarket.com"
+    CLOB_URL = "https://clob.polymarket.com"
     MARKETS_ENDPOINT = "/markets"
-    ORDER_BOOK_ENDPOINT = "/order-book"
+    # ORDER_BOOK_ENDPOINT = "/book" # CLOB endpoint
 
     def __init__(self, api_key: Optional[str] = None):
         """Initialize Polymarket client.
@@ -410,9 +412,10 @@ class PolymarketClient:
             OrderBook object or None if not found
         """
         try:
+            # Use CLOB API directly for Order Book as Gamma endpoint is unreliable for Token IDs
             response = await self.client.get(
-                f"{self.BASE_URL}{self.ORDER_BOOK_ENDPOINT}/{market_id}",
-                headers=self.headers,
+                f"{self.CLOB_URL}/book",
+                params={"token_id": market_id}, # using market_id as token_id argument
             )
             response.raise_for_status()
             data = response.json()

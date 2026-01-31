@@ -483,8 +483,16 @@ class CommandProcessor:
                         display_side = market.outcomes[idx] if idx < len(market.outcomes) else side
                         self.console.print(f"[dim]Resolved to \"{display_side}\" Token: {token_id[:10]}...[/dim]")
 
-                    result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id, side="SELL")
-                    self._display_data("Real Trade Execution (SELL)", result)
+                    try:
+                        result = await self._exec_tool("place_real_order", amount=amount, token_id=token_id, side="SELL")
+                        self._display_data("Real Trade Execution (SELL)", result)
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "no match" in err_str:
+                             self.console.print(f"[bold red]Liquidity Error:[/bold red] No buyers found for this token (Empty Bid Side). Unable to sell at market price.")
+                             # Optional: Check OB depth?
+                        else:
+                             self.console.print(f"[bold red]Execution Error:[/bold red] {e}")
                 else:
                     # Paper sell
                     # New Logic: Close trades by Market ID + Side using FIFO

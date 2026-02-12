@@ -1,3 +1,4 @@
+from typing import Optional
 from textual.app import App, ComposeResult, on
 from textual.containers import Vertical, Horizontal
 from textual.widgets import Header, Footer, Input, Markdown, Static, Label

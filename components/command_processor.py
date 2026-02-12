@@ -93,6 +93,88 @@ class CommandProcessor:
              self._display_data(f"{ticker} Quote", result)
              return True, None
 
+        # Bloomberg-style commands
+        elif cmd == "des":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: Specify ticker (e.g., des AAPL)[/red]")
+                return True, None
+            self.current_ticker = ticker
+            self.console.print(f"Fetching [bold cyan]Description (DES)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_ticker_details", ticker=ticker)
+            self._display_data(f"{ticker} Profile (DES)", result)
+            return True, None
+
+        elif cmd == "fa":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Financial Analysis (FA)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_financials", ticker=ticker, statement_type="all")
+            self._display_data(f"{ticker} Financials (FA)", result)
+            return True, None
+
+        elif cmd == "anr":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Analyst Recommendations (ANR)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_analyst_recommendations", ticker=ticker)
+            self._display_data(f"{ticker} Analyst Ratings (ANR)", result)
+            return True, None
+
+        elif cmd == "ee":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Earnings Estimates (EE)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_earnings_estimates", ticker=ticker)
+            self._display_data(f"{ticker} Earnings Estimates (EE)", result)
+            return True, None
+
+        elif cmd == "rv":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Relative Valuation (RV)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_relative_valuation", ticker=ticker)
+            self._display_data(f"{ticker} Relative Valuation (RV)", result)
+            return True, None
+
+        elif cmd == "own":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Ownership (OWN)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_ownership", ticker=ticker)
+            self._display_data(f"{ticker} Ownership (OWN)", result)
+            return True, None
+
+        elif cmd == "gp":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Price Graph (GP)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_price_graph", ticker=ticker)
+            self._display_data(f"{ticker} Price Graph (GP)", result)
+            return True, None
+
+        elif cmd == "gip":
+            ticker = args[0].upper() if args else self.current_ticker
+            if not ticker:
+                self.console.print("[red]Error: No ticker loaded/specified.[/red]")
+                return True, None
+            self.console.print(f"Fetching [bold cyan]Intraday Graph (GIP)[/bold cyan] for {ticker}...")
+            result = await self._exec_tool("get_intraday_graph", ticker=ticker)
+            self._display_data(f"{ticker} Intraday Graph (GIP)", result)
+            return True, None
+
         elif user_input.strip().lower().startswith("poly:"):
             full_input = user_input.strip()
             if full_input.lower().startswith("poly: "):
@@ -536,6 +618,83 @@ class CommandProcessor:
             return
 
         pretty_json = json.dumps(data, indent=2)
+        
+        # Check if it's a specialty report (EE, ANR, RV, OWN)
+        if isinstance(data, dict):
+            # ANR Handling
+            if "ratings" in data and "consensus" in data:
+                ratings = data.get("ratings", {})
+                grid = Table.grid(padding=(0, 2))
+                grid.add_column(justify="right", style="bold")
+                grid.add_column(justify="left")
+                grid.add_row("Consensus:", f"[bold green]{data.get('consensus')}[/bold green]")
+                grid.add_row("Price Target:", f"${data.get('price_target')}" if data.get("price_target") else "N/A")
+                grid.add_row("Buy/Hold/Sell:", f"{ratings.get('buy', 0)} / {ratings.get('hold', 0)} / {ratings.get('sell', 0)}")
+                self.console.print(Panel(grid, title=f"[bold]Analyst Recommendations (ANR) - {data.get('ticker')}[/bold]", border_style="cyan"))
+                return
+
+            # OWN Handling
+            if "market_cap" in data and "ticker" in data and "message" in data:
+                 grid = Table.grid(padding=(0, 2))
+                 grid.add_column(justify="right", style="bold")
+                 grid.add_column(justify="left")
+                 mcap = f"${data['market_cap']:,}" if isinstance(data.get("market_cap"), (int, float)) else "N/A"
+                 grid.add_row("Market Cap:", mcap)
+                 grid.add_row("Shares Outstanding:", f"{data.get('share_class_shares_outstanding', 0):,}")
+                 grid.add_row("Note:", f"[dim]{data.get('message')}[/dim]")
+                 self.console.print(Panel(grid, title=f"[bold]Ownership Summary (OWN) - {data.get('ticker')}[/bold]", border_style="cyan"))
+                 return
+
+            # RV Handling
+            if "peers" in data and "industry" in data:
+                peers = ", ".join(data.get("peers", []))
+                grid = Table.grid(padding=(0, 2))
+                grid.add_column(justify="right", style="bold")
+                grid.add_column(justify="left")
+                grid.add_row("Industry:", data.get("industry"))
+                grid.add_row("Sector:", data.get("sector"))
+                grid.add_row("Peers:", peers)
+                self.console.print(Panel(grid, title=f"[bold]Relative Valuation (RV) Peers - {data.get('ticker')}[/bold]", border_style="cyan"))
+                return
+
+            # GP / GIP (Aggregates) Handling
+            if "results" in data and isinstance(data["results"], list) and len(data["results"]) > 0:
+                # If there are result items, it's likely a graph response
+                results = data["results"]
+                table = Table(title=f"Price Aggregates - {data.get('ticker')}", show_header=True, header_style="bold magenta")
+                table.add_column("Date/Time", style="dim")
+                table.add_column("Open", justify="right")
+                table.add_column("High", justify="right")
+                table.add_column("Low", justify="right")
+                table.add_column("Close", justify="right")
+                table.add_column("Volume", justify="right")
+
+                from datetime import datetime
+                for res in results[:20]: # Show only first 20 for brevity
+                    ts = datetime.fromtimestamp(res["t"] / 1000).strftime('%Y-%m-%d %H:%M')
+                    table.add_row(
+                        ts,
+                        f"${res['o']:.2f}",
+                        f"${res['h']:.2f}",
+                        f"${res['l']:.2f}",
+                        f"${res['c']:.2f}",
+                        f"{res['v']:,}"
+                    )
+                self.console.print(table)
+                if len(results) > 20:
+                    self.console.print(f"[dim]Showing 20 of {len(results)} data points...[/dim]")
+                return
+
+            # FA (All Financials) Handling
+            if all(k in data for k in ["income", "balance", "cash_flow"]):
+                self.console.print(f"\n[bold green]Aggregated Financial Analysis (FA) for {title}[/bold green]")
+                for st_name, st_data in data.items():
+                    if "error" in st_data:
+                        self.console.print(f"[red]Error fetching {st_name}: {st_data['error']}[/red]")
+                    else:
+                        self._display_data(f"{st_name.title()} Statement", st_data)
+                return
+
         panel = Panel(
             Syntax(pretty_json, "json", theme="monokai", word_wrap=True),
             title=f"[bold green]{title}[/bold green]",

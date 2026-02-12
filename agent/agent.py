@@ -27,6 +27,8 @@ from model.llm import LLMProvider
 from agent.tools import (
     FinancialsTool, 
     TickerTool, 
+    StockAnalysisTool,
+    StockGraphTool,
     NewsTool, 
     WebSearchTool,
     PolymarketCLOBClient,
@@ -202,20 +204,58 @@ class Agent:
 
         financial_tool = FinancialsTool()
         ticker_tool = TickerTool()
+        analysis_tool = StockAnalysisTool()
+        graph_tool = StockGraphTool()
         news_tool = NewsTool()
         web_tool = WebSearchTool()
 
         tools = [
             StructuredTool(
                 name="get_financials",
-                description="Get financial statements for a company. Parameters: ticker (stock symbol, e.g. 'AAPL'), statement_type ('income', 'balance', or 'cash_flow'), and period ('annual' or 'quarterly').",
+                description="Get financial statements for a company (FA command). Parameters: ticker (stock symbol, e.g. 'AAPL'), statement_type ('income', 'balance', 'cash_flow', or 'all'), and period ('annual' or 'quarterly').",
                 func=financial_tool.get_financials,
                 args_schema=None,
             ),
             StructuredTool(
                 name="get_ticker_details",
-                description="Get detailed information about a stock ticker symbol (e.g., AAPL).",
+                description="Get detailed information about a stock ticker symbol (DES command).",
                 func=ticker_tool.get_ticker_details,
+                args_schema=None,
+            ),
+            StructuredTool(
+                name="get_ownership",
+                description="Get ownership summary for a security (OWN command).",
+                func=ticker_tool.get_ownership,
+                args_schema=None,
+            ),
+            StructuredTool(
+                name="get_analyst_recommendations",
+                description="Get analyst buy/sell/hold ratings (ANR command).",
+                func=analysis_tool.get_analyst_recommendations,
+                args_schema=None,
+            ),
+            StructuredTool(
+                name="get_earnings_estimates",
+                description="Get earnings estimates and consensus forecasts (EE command).",
+                func=analysis_tool.get_earnings_estimates,
+                args_schema=None,
+            ),
+            StructuredTool(
+                name="get_relative_valuation",
+                description="Compares a security against its peers (RV command).",
+                func=analysis_tool.get_relative_valuation,
+                args_schema=None,
+            ),
+            StructuredTool(
+                name="get_price_graph",
+                description="Get a standard price graph data with volume (GP command).",
+                func=graph_tool.get_price_graph,
+                args_schema=None,
+            ),
+            StructuredTool(
+                name="get_intraday_graph",
+                description="Intraday price graph for analyzing trends within a single day (GIP command).",
+                func=graph_tool.get_intraday_graph,
                 args_schema=None,
             ),
             StructuredTool(
@@ -279,6 +319,19 @@ class Agent:
                     name="web_search",
                     description="Search the web for general financial information",
                     func=web_tool.search,
+                    args_schema=None,
+                )
+            )
+
+        # Knowledge Base (RAG) Tool
+        from agent.tools.knowledge_base import KnowledgeBaseTool
+        kb_tool = KnowledgeBaseTool()
+        if kb_tool.embeddings_model:
+            tools.append(
+                StructuredTool(
+                    name="search_knowledge_base",
+                    description="Search the centralized database for internal research, logs, and reports. Queries should be questions.",
+                    func=kb_tool.search,
                     args_schema=None,
                 )
             )

@@ -26,18 +26,21 @@ class FinancialsTool:
         **kwargs
     ) -> str:
         """
-        Get financial statements for a company.
+        Get financial statements for a company (FA command).
         
         Args:
             ticker: Stock ticker symbol (also accepts 'company')
-            statement_type: Type of statement (income, balance, cash_flow)
+            statement_type: Type of statement (income, balance, cash_flow, or 'all')
             period: Period type (annual, quarterly)
         """
         ticker = ticker or kwargs.get("company")
-        statement_type = statement_type or kwargs.get("statement") or "income"
+        statement_type = (statement_type or kwargs.get("statement") or "income").lower()
         
         if not ticker:
             return json.dumps({"error": "Missing 'ticker' or 'company' parameter"})
+
+        if statement_type == "all":
+            return self.get_all_financials(ticker, period)
 
         try:
             if self.provider == "massive":
@@ -59,13 +62,12 @@ class FinancialsTool:
                     result = data["results"][0]
                     financials = result.get("financials", {})
                     
-                    ptype = statement_type.lower()
                     mkey = None
-                    if "income" in ptype:
+                    if "income" in statement_type:
                         mkey = "income_statement"
-                    elif "balance" in ptype:
+                    elif "balance" in statement_type:
                         mkey = "balance_sheet"
-                    elif "cash" in ptype:
+                    elif "cash" in statement_type:
                         mkey = "cash_flow_statement"
                     
                     if mkey and mkey in financials:
@@ -92,6 +94,17 @@ class FinancialsTool:
                 return json.dumps(response.json())
         except Exception as e:
             return json.dumps({"error": str(e)})
+
+    def get_all_financials(self, ticker: str, period: str = "annual") -> str:
+        """Get all three major financial statements at once."""
+        statements = {}
+        for st in ["income", "balance", "cash_flow"]:
+            res = self.get_financials(ticker, st, period)
+            try:
+                statements[st] = json.loads(res)
+            except:
+                statements[st] = {"error": f"Could not fetch {st}"}
+        return json.dumps(statements)
 
     def close(self):
         self.client.close()

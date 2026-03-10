@@ -105,7 +105,7 @@ async def test_agent_basic():
 async def main():
     """Run all tests."""
     print("=" * 60)
-    print("FinCode - XAI Integration Test Suite")
+    print("PolyCode - XAI Integration Test Suite")
     print("=" * 60)
     
     # Test 1: XAI Connection

@@ -62,7 +62,7 @@ class VisualCrossingClient:
 
         import asyncio
         max_retries = 10
-        if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+        if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
             print(f"DEBUG: Weather API Request: {url} (params={ {k:v for k,v in params.items() if k != 'key'} })")
         for attempt in range(max_retries):
             response = await self.client.get(url, params=params)

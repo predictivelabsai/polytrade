@@ -1,7 +1,7 @@
 # Polymarket Autonomous Trading Agent - Implementation Summary
 
 **Project:** Polymarket Weather-Based Trading Simulation Agent  
-**Repository:** https://github.com/predictivelabsai/fincode  
+**Repository:** https://github.com/predictivelabsai/polycode
 **Branch:** polyagent  
 **Status:** ✅ Complete and Deployed  
 **Date:** January 25, 2026
@@ -10,7 +10,7 @@
 
 ## Executive Summary
 
-This document provides a comprehensive overview of the Polymarket autonomous trading agent implementation. The project extends the `fincode` financial CLI with a sophisticated weather-based trading strategy that simulates trading on Polymarket's weather markets. The implementation includes API integrations, trading strategy logic, comprehensive testing, and documentation.
+This document provides a comprehensive overview of the Polymarket autonomous trading agent implementation. The project extends the `polycode` financial CLI with a sophisticated weather-based trading strategy that simulates trading on Polymarket's weather markets. The implementation includes API integrations, trading strategy logic, comprehensive testing, and documentation.
 
 ## 1. Project Deliverables
 
@@ -219,8 +219,8 @@ The Tomorrow.io API provides weather forecasts and requires an API key.
 
 1. **Clone the repository:**
    ```bash
-   git clone -b polyagent https://github.com/predictivelabsai/fincode.git
-   cd fincode
+   git clone -b polyagent https://github.com/predictivelabsai/polycode.git
+   cd polycode
    ```
 
 2. **Install dependencies:**
@@ -259,7 +259,7 @@ python -m pytest tests/test_polyagent.py -v
 ## 5. File Structure
 
 ```
-fincode/
+polycode/
 ├── polyagent_cli.py                    # Main CLI entry point
 ├── agent/
 │   └── tools/
@@ -452,6 +452,6 @@ The modular architecture allows for easy extension to other markets and strategi
 ---
 
 **Project Status:** ✅ Complete  
-**Repository:** https://github.com/predictivelabsai/fincode (polyagent branch)  
+**Repository:** https://github.com/predictivelabsai/polycode (polyagent branch)  
 **Last Updated:** January 25, 2026  
 **Implemented by:** Manus AI

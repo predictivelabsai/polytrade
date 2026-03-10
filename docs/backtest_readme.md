@@ -37,7 +37,7 @@ For each day in the backtest period:
 
 ## CLI Usage
 
-You can run backtests directly from the FinCode CLI using the `poly:backtest` command.
+You can run backtests directly from the PolyCode CLI using the `poly:backtest` command.
 
 ### Command Syntax
 

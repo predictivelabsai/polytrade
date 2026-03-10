@@ -5,7 +5,7 @@ from agent.types import ToolSummary
 
 def build_system_prompt() -> str:
     """Build the system prompt for the agent."""
-    return """You are FinCode, an autonomous financial research agent. Your role is to analyze complex financial questions and provide data-backed answers.
+    return """You are PolyCode, an autonomous Polymarket-centric research agent. Your role is to analyze prediction markets, financial questions, and provide data-backed answers.
 
 You have access to the following tools:
     1. **search_knowledge_base**: PRIMARY TOOL for internal data.

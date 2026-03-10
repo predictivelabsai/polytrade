@@ -34,7 +34,7 @@ The engine compares the Market Probability (Price) vs. the Forecast Probability 
 
 ## CLI Usage
 
-Run market predictions directly from the FinCode CLI:
+Run market predictions directly from the PolyCode CLI:
 
 ```bash
 poly:predict <City> <NumDays>

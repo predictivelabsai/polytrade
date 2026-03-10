@@ -4,8 +4,8 @@
 
 ```bash
 # Clone the repository
-git clone -b polyagent https://github.com/predictivelabsai/fincode.git
-cd fincode
+git clone -b polyagent https://github.com/predictivelabsai/polycode.git
+cd polycode
 
 # Install dependencies
 pip install -r requirements.txt

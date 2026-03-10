@@ -87,7 +87,7 @@ class BacktestEngine:
             count = max(1, lookback_days)
             date_range = [(effective_end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(count - 1, -1, -1)]
         
-        if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+        if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
             print(f"DEBUG: Mode={'Prediction' if is_prediction else 'Backtest'}, Range={date_range}")
 
         for current_date in date_range:
@@ -112,7 +112,7 @@ class BacktestEngine:
             }
             markets = []
             seen_ids = set()
-            if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+            if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                 print(f"DEBUG: Searching queries: {queries}")
             for q in queries:
                  res = await self.pm_client.gamma_search(q, status="all", limit=500)
@@ -168,7 +168,7 @@ class BacktestEngine:
                      
                  return filtered
 
-            if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+            if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                 print(f"DEBUG: Found {len(markets)} raw unique markets across all queries.")
                 relevant_markets = filter_markets(markets)
                 print(f"DEBUG: Found {len(relevant_markets)} relevant markets after filtering.")
@@ -182,11 +182,11 @@ class BacktestEngine:
                 if alt_query not in queries:
                      alt_markets = await self.pm_client.gamma_search(alt_query, status="all", limit=500)
                      relevant_markets = filter_markets(alt_markets)
-                     if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+                     if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                          print(f"DEBUG: Alt search found {len(relevant_markets)} markets.")
 
             if not relevant_markets:
-                if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+                if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                     print(f"DEBUG: No relevant markets found for {current_date}.")
                 continue
 
@@ -213,7 +213,7 @@ class BacktestEngine:
                 
                 # Secondary weather: Tomorrow.io for "Double Check" during predictions
                 if is_prediction and self.tm_client:
-                    if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+                    if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                         print(f"DEBUG: [Tomorrow.io] Fetching secondary forecast for {current_date}")
                     secondary_weather = await self.tm_client.get_day_weather(weather_city, current_date)
             except Exception as e:
@@ -405,7 +405,7 @@ class BacktestEngine:
                 edge = entry_data.get("edge", 0)
                 fair_price = item["fair_price"]
                 
-                if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+                if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                     print(f"DEBUG: Bucket {bucket_label} - Fair: {fair_price:.3f}, Mkt: {price:.3f}, Edge: {edge:.3f}")
                 
                  # Check if this bucket/side was selected

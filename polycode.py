@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Main entry point for FinCode CLI."""
+"""Main entry point for PolyCode CLI."""
 import asyncio
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from components.cli import FinCodeCLI
+from components.cli import PolyCodeCLI
 
 
 async def main():
@@ -19,7 +19,7 @@ async def main():
     provider = os.getenv("MODEL_PROVIDER", "xai")
 
     # Create and run app
-    cli = FinCodeCLI(model=model, provider=provider)
+    cli = PolyCodeCLI(model=model, provider=provider)
     
     import sys
     if len(sys.argv) > 1:

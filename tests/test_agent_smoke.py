@@ -1,4 +1,4 @@
-"""Smoke test for the FinCode agent."""
+"""Smoke test for the PolyCode agent."""
 import asyncio
 import os
 import sys

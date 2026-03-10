@@ -13,7 +13,7 @@ from agent.tools.polymarket_tool import PolymarketClient
 from agent.tools.visual_crossing_client import VisualCrossingClient
 from utils.backtest_engine import BacktestEngine
 
-app = FastAPI(title="FinCode API", description="API for FinCode Financial Research Agent")
+app = FastAPI(title="PolyCode API", description="API for PolyCode Polymarket Research Agent")
 
 # Models
 class ForecastRequest(BaseModel):
@@ -31,7 +31,7 @@ class PredictRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "FinCode API is running", "status": "active"}
+    return {"message": "PolyCode API is running", "status": "active"}
 
 @app.post("/weather")
 async def get_weather(request: ForecastRequest):

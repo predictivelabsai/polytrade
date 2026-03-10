@@ -4,7 +4,7 @@ This document provides a comprehensive overview of the Polymarket autonomous tra
 
 ## 1. Project Overview
 
-The Polymarket trading agent is an extension of the `fincode` financial CLI, designed to simulate a specific trading strategy that has shown significant returns. The core of the agent is a Python script, `polyagent_cli.py`, which orchestrates the entire process from market scanning to trade execution and portfolio simulation.
+The Polymarket trading agent is an extension of the `polycode` CLI, designed to simulate a specific trading strategy that has shown significant returns. The core of the agent is a Python script, `polyagent_cli.py`, which orchestrates the entire process from market scanning to trade execution and portfolio simulation.
 
 ### 1.1. Trading Strategy
 
@@ -50,7 +50,7 @@ The key files and directories in the project are:
 
 ### 2.2. Running the Agent
 
-To run the trading agent simulation, execute the following command from the root of the `fincode` directory:
+To run the trading agent simulation, execute the following command from the root of the `polycode` directory:
 
 ```bash
 python3 polyagent_cli.py

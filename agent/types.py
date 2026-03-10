@@ -1,4 +1,4 @@
-"""Type definitions for the FinCode agent."""
+"""Type definitions for the PolyCode agent."""
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Literal
 from enum import Enum

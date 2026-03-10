@@ -1,6 +1,6 @@
 # Mobile API & Thin Client Architecture
 
-This guide explains how to run FinCode as a distributed system with a generic FastAPI backend and a lightweight Android/Termux client.
+This guide explains how to run PolyCode as a distributed system with a generic FastAPI backend and a lightweight Android/Termux client.
 
 ## Architecture
 
@@ -11,7 +11,7 @@ This guide explains how to run FinCode as a distributed system with a generic Fa
 
 1.  Navigate to the project root:
     ```bash
-    cd /path/to/fincode
+    cd /path/to/polycode
     ```
 
 2.  Install API dependencies:

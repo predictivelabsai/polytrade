@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Textual TUI entry point for FinCode."""
+"""Textual TUI entry point for PolyCode."""
 import os
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # Ensure we can import from the root directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from components.app import FinCodeApp
+from components.app import PolyCodeApp
 
 def main():
     # Load environment variables
@@ -17,7 +17,7 @@ def main():
         load_dotenv(env_path)
     
     # Run the app
-    app = FinCodeApp()
+    app = PolyCodeApp()
     app.run()
 
 if __name__ == "__main__":

@@ -380,7 +380,7 @@ async def alert_on_large_trades(client, market_id, threshold=0.5):
 For API support:
 - Email: api@polymarket.com
 - Discord: https://discord.gg/polymarket
-- GitHub Issues: https://github.com/predictivelabsai/fincode/issues
+- GitHub Issues: https://github.com/predictivelabsai/polycode/issues
 
 ---
 

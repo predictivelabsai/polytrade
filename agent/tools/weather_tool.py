@@ -136,14 +136,14 @@ class WeatherClient:
                 "timelines": "1d,1h"
             }
             
-            if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+            if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                 print(f"DEBUG: [Tomorrow.io] Real API Request for {city} (location={location})")
 
             res = await self.client.get(f"{self.BASE_URL}{self.FORECAST_ENDPOINT}", params=params)
             res.raise_for_status()
             return res.json()
         except Exception as e:
-            if os.getenv("FINCODE_DEBUG", "false").lower() == "true":
+            if os.getenv("POLYCODE_DEBUG", "false").lower() == "true":
                 print(f"DEBUG: [Tomorrow.io] Error: {e}")
             return None
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wrapper script to run FinCode CLI with virtual environment
+# Wrapper script to run PolyCode CLI with virtual environment
 
 # Get the directory of this script
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -13,4 +13,4 @@ else
 fi
 
 # Run the Python application
-exec python "$DIR/fincode.py" "$@"
+exec python "$DIR/polycode.py" "$@"

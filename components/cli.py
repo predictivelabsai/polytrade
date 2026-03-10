@@ -1,4 +1,4 @@
-"""Simplified CLI interface for FinCode."""
+"""Simplified CLI interface for PolyCode."""
 import asyncio
 from typing import Optional, List, Dict
 from rich.console import Console
@@ -14,8 +14,8 @@ from components.command_processor import CommandProcessor
 
 import os
 
-class FinCodeCLI:
-    """CLI application for FinCode."""
+class PolyCodeCLI:
+    """CLI application for PolyCode."""
 
     def __init__(self, model: Optional[str] = None, provider: Optional[str] = None):
         self.model = model or os.getenv("MODEL", "grok-3")
@@ -56,7 +56,7 @@ class FinCodeCLI:
                 # We could stream chunky answers, but for now we wait for Done
                 pass
             elif isinstance(event, DoneEvent):
-                self.console.print("\n[bold cyan]FinCode:[/bold cyan]")
+                self.console.print("\n[bold cyan]PolyCode:[/bold cyan]")
                 self.console.print(Markdown(event.answer))
                 self.chat_history.append({"role": "assistant", "content": event.answer})
 
@@ -64,7 +64,7 @@ class FinCodeCLI:
         """Run the CLI interactive loop."""
         await self.initialize()
 
-        self.console.print("\n[bold cyan]FinCode CLI[/bold cyan] - Financial Research Agent")
+        self.console.print("\n[bold cyan]PolyCode CLI[/bold cyan] - Polymarket Research Agent")
         self.console.print(f"[yellow]Model:[/yellow] {self.model}")
         self.console.print(f"[yellow]Provider:[/yellow] {self.provider}")
         self.console.print("Type 'help' for commands or ask a question.\n")

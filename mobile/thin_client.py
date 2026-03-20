@@ -9,7 +9,7 @@ import subprocess
 API_URL = "http://127.0.0.1:8000"  # Change to your server IP when running on mobile
 
 class ThinTUI(App):
-    """A thin client for PolyCode running on Textual."""
+    """A thin client for PolyTrade running on Textual."""
     
     CSS = """
     Screen {

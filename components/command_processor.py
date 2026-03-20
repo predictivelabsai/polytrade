@@ -40,7 +40,7 @@ class CommandProcessor:
             os.system('cls' if os.name == 'nt' else 'clear')
             return True, None
         elif cmd in ["exit", "q"]:
-            self.console.print("[yellow]Exiting PolyCode...[/yellow]")
+            self.console.print("[yellow]Exiting PolyTrade...[/yellow]")
             sys.exit(0)
         elif cmd == "reset" or cmd == "r" or user_input == "..":
             self.current_ticker = None
@@ -1054,8 +1054,7 @@ class CommandProcessor:
         self.console.print(Panel(summary, title="[bold]Portfolio Summary[/bold]", border_style="cyan"))
 
     def _show_help(self):
-        # Basic Commands Table
-        table = Table(title="PolyCode Global Commands (BASH-STYLE)", show_header=True, header_style="bold cyan")
+        table = Table(title="PolyTrade Global Commands (BASH-STYLE)", show_header=True, header_style="bold cyan")
         table.add_column("Command", style="bold yellow")
         table.add_column("Description")
         table.add_column("Speed", style="italic green")
@@ -1081,29 +1080,7 @@ class CommandProcessor:
         table.add_row("exit, q", "Quit application", "-")
         
         self.console.print(table)
-        
-        # Bloomberg Terminal Commands Table
-        self.console.print()
-        bloomberg = Table(title="Bloomberg Terminal Commands", show_header=True, header_style="bold magenta")
-        bloomberg.add_column("Command", style="bold yellow")
-        bloomberg.add_column("Description")
-        bloomberg.add_column("Speed", style="italic green")
-        
-        bloomberg.add_row("des [ticker]", "Description - Company profile & details", "Instant")
-        bloomberg.add_row("fa [ticker]", "Financial Analysis - All statements", "Instant")
-        bloomberg.add_row("anr [ticker]", "Analyst Recommendations - Buy/Hold/Sell", "Instant")
-        bloomberg.add_row("ee [ticker]", "Earnings Estimates - Consensus forecasts", "Instant")
-        bloomberg.add_row("rv [ticker]", "Relative Valuation - Peer comparison", "Instant")
-        bloomberg.add_row("own [ticker]", "Ownership - Market cap & shares", "Instant")
-        bloomberg.add_row("gp [ticker]", "Price Graph - Historical OHLCV", "Instant")
-        bloomberg.add_row("gip [ticker]", "Intraday Graph - Today's price action", "Instant")
-        
-        self.console.print(bloomberg)
-        
         self.console.print("\n[bold cyan]Examples:[/bold cyan]")
-        self.console.print("  [yellow]load AAPL[/yellow] → [yellow]fa[/yellow] - Load ticker, then view financials")
-        self.console.print("  [yellow]des TSLA[/yellow] - Quick company profile")
-        self.console.print("  [yellow]anr MSFT[/yellow] - Analyst ratings")
-        self.console.print("  [yellow]gp AAPL[/yellow] - Price chart")
         self.console.print("  [yellow]poly:weather London[/yellow] - Search for London weather markets")
+        self.console.print("  [yellow]poly:weather \"temperature New York\"[/yellow] - Detailed keyword search")
         self.console.print("\n[italic]Note: Any other input is handled by the AI Research Agent (LangGraph).[/italic]")

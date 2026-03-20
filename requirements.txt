@@ -1,15 +1,35 @@
-textual
-python-dotenv
+# ── Core agent ────────────────────────────────────────────────────────────
 langchain
 langchain-openai
 langchain-anthropic
 langchain-google-genai
 langgraph
+langchain-core
 pydantic
+python-dotenv
+
+# ── HTTP clients ──────────────────────────────────────────────────────────
 httpx
 requests
-zod
-click
+
+# ── Terminal UI (existing) ────────────────────────────────────────────────
+textual
 rich
+click
+
+# ── Trading ───────────────────────────────────────────────────────────────
 py-clob-client
+
+# ── Web UIs (FastHTML: app.py, web_app.py, agui_app.py) ──────────────────
+python-fasthtml
+uvicorn
+
+# ── REST API ─────────────────────────────────────────────────────────────
+fastapi
+
+# ── Database ─────────────────────────────────────────────────────────────
+asyncpg
+psycopg2-binary
+
+# ── Dev / test ────────────────────────────────────────────────────────────
 pytest

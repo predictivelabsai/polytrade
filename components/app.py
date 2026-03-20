@@ -22,7 +22,7 @@ class StatusPanel(Static):
 import os
 
 class PolyCodeApp(App):
-    """Full Textual TUI application for PolyCode."""
+    """Full Textual TUI application for PolyTrade."""
 
     CSS = """
     Screen {
@@ -77,7 +77,7 @@ class PolyCodeApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="main_container"):
-            yield Static(f"[bold cyan]PolyCode[/bold cyan] | Polymarket Research Agent | [yellow]{self.model_name}[/yellow]", id="intro")
+            yield Static(f"[bold cyan]PolyTrade[/bold cyan] | Agentic Financial Research | [yellow]{self.model_name}[/yellow]", id="intro")
             yield Markdown("", id="result_view")
         yield StatusPanel("Ready", id="status_bar")
         with Horizontal(id="input_container"):

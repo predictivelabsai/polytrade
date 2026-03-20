@@ -1,0 +1,17 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+ENV AGUI_RELOAD=false
+
+EXPOSE 4003
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:4003/')"
+
+CMD ["python", "agui_app.py"]

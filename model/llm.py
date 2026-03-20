@@ -31,18 +31,21 @@ class LLMProvider:
                 model=model,
                 temperature=temperature,
                 api_key=os.getenv("OPENAI_API_KEY"),
+                streaming=True,
             )
         elif provider == "anthropic":
             return ChatAnthropic(
                 model=model,
                 temperature=temperature,
                 api_key=os.getenv("ANTHROPIC_API_KEY"),
+                streaming=True,
             )
         elif provider == "google":
             return ChatGoogleGenerativeAI(
                 model=model,
                 temperature=temperature,
                 api_key=os.getenv("GOOGLE_API_KEY"),
+                streaming=True,
             )
         elif provider == "xai":
             # xAI uses OpenAI-compatible API
@@ -51,6 +54,7 @@ class LLMProvider:
                 base_url="https://api.x.ai/v1",
                 api_key=os.getenv("XAI_API_KEY"),
                 temperature=temperature,
+                streaming=True,
             )
         elif provider == "ollama":
             from langchain_ollama import ChatOllama

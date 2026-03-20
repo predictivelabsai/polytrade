@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Main entry point for PolyCode CLI."""
+"""Main entry point for PolyTrade CLI."""
 import asyncio
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 from components.cli import PolyCodeCLI
@@ -14,12 +13,8 @@ async def main():
     if env_path.exists():
         load_dotenv(env_path)
 
-    # Get model and provider from environment or use defaults
-    model = os.getenv("MODEL", "grok-3")
-    provider = os.getenv("MODEL_PROVIDER", "xai")
-
-    # Create and run app
-    cli = PolyCodeCLI(model=model, provider=provider)
+    # Create and run app (model/provider read from .env by PolyTrade CLI)
+    cli = PolyCodeCLI()
     
     import sys
     if len(sys.argv) > 1:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Textual TUI entry point for PolyCode."""
+"""Textual TUI entry point for PolyTrade."""
 import os
 import sys
 from pathlib import Path

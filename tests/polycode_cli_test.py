@@ -40,7 +40,7 @@ async def test_cli_query_repro():
                 # Just print a dot to show progress
                 print(".", end="", flush=True)
             elif isinstance(event, DoneEvent):
-                print(f"\n\nPolyCode Final Answer:\n{event.answer}")
+                print(f"\n\nPolyTrade Final Answer:\n{event.answer}")
                 found_answer = True
                 break
     except Exception as e:

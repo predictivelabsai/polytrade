@@ -1,4 +1,4 @@
-"""Type definitions for the PolyCode agent."""
+"""Type definitions for the PolyTrade agent."""
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Literal
 from enum import Enum
@@ -68,6 +68,12 @@ class DoneEvent:
     iterations: int = 0
 
 
+@dataclass
+class StreamResetEvent:
+    """Signal to clear any streamed partial answer (model is calling tools)."""
+    type: Literal["stream_reset"] = "stream_reset"
+
+
 AgentEvent = (
     ToolStartEvent
     | ToolEndEvent
@@ -76,15 +82,16 @@ AgentEvent = (
     | AnswerChunkEvent
     | DoneEvent
     | LogEvent
+    | StreamResetEvent
 )
 
 
 @dataclass
 class AgentConfig:
     """Configuration for the Agent."""
-    model: str = "gpt-4.1-mini"
-    model_provider: str = "openai"
-    max_iterations: int = 10
+    model: Optional[str] = None
+    model_provider: Optional[str] = None
+    max_iterations: int = 3
     signal: Optional[Any] = None
 
 

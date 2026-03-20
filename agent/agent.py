@@ -21,6 +21,7 @@ from agent.types import (
     AnswerChunkEvent,
     DoneEvent,
     LogEvent,
+    StreamResetEvent,
     ToolSummary,
 )
 from model.llm import LLMProvider
@@ -58,7 +59,7 @@ class AgentState(TypedDict):
 class Agent:
     """LangGraph-based agent for financial research."""
 
-    DEFAULT_MAX_ITERATIONS = 10
+    DEFAULT_MAX_ITERATIONS = 3
 
     def __init__(
         self,
@@ -67,8 +68,8 @@ class Agent:
         system_prompt: str,
     ):
         """Initialize the agent."""
-        self.model = config.model or os.getenv("MODEL", "grok-3")
-        self.model_provider = config.model_provider or os.getenv("MODEL_PROVIDER", "xai")
+        self.model = config.model or os.getenv("MODEL")
+        self.model_provider = config.model_provider or os.getenv("MODEL_PROVIDER")
         self.max_iterations = config.max_iterations or self.DEFAULT_MAX_ITERATIONS
         self.tools = tools
         self.tool_map = {tool.name: tool for tool in tools}
@@ -119,8 +120,8 @@ class Agent:
         # We always include the system prompt and the current message history
         actual_messages = [SystemMessage(content=self.system_prompt)] + messages + [HumanMessage(content=iteration_prompt)]
 
-        # Call LLM
-        response = await asyncio.to_thread(self.llm.invoke, actual_messages)
+        # Call LLM (native async — enables streaming via astream_events)
+        response = await self.llm.ainvoke(actual_messages)
         response_text = response.content if hasattr(response, "content") else str(response)
 
         return {
@@ -178,7 +179,7 @@ class Agent:
         final_prompt = build_final_answer_prompt(query, scratchpad, summaries, last_thought)
         actual_messages = [SystemMessage(content=self.system_prompt)] + state["messages"] + [HumanMessage(content=final_prompt)]
 
-        response = await asyncio.to_thread(self.llm.invoke, actual_messages)
+        response = await self.llm.ainvoke(actual_messages)
         final_answer = response.content if hasattr(response, "content") else str(response)
 
         return {"final_answer": final_answer}
@@ -194,7 +195,9 @@ class Agent:
 
         if tool_calls:
             return "tools"
-        return "final"
+        # Skip generate_final_answer (extra LLM call) — the model's
+        # response IS the answer. run() fallback uses last_model_response.
+        return "end"
 
     @staticmethod
     def create(config: AgentConfig = None) -> "Agent":
@@ -323,19 +326,6 @@ class Agent:
                 )
             )
 
-        # Knowledge Base (RAG) Tool
-        from agent.tools.knowledge_base import KnowledgeBaseTool
-        kb_tool = KnowledgeBaseTool()
-        if kb_tool.embeddings_model:
-            tools.append(
-                StructuredTool(
-                    name="search_knowledge_base",
-                    description="Search the centralized database for internal research, logs, and reports. Queries should be questions.",
-                    func=kb_tool.search,
-                    args_schema=None,
-                )
-            )
-
         system_prompt = build_system_prompt()
         return Agent(config, tools, system_prompt)
 
@@ -344,8 +334,13 @@ class Agent:
         query: str,
         chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> AsyncGenerator[AgentEvent, None]:
-        """Run the agent and stream events via LangGraph."""
-        
+        """Run the agent and stream events via LangGraph.
+
+        Streams LLM tokens in real-time using on_chat_model_stream events.
+        If the model decides to call tools, a StreamResetEvent is emitted
+        so the UI can clear any optimistically-streamed text.
+        """
+
         # Convert chat history to messages
         messages = []
         if chat_history:
@@ -361,58 +356,89 @@ class Agent:
             "scratchpad": f"Query: {query}\n",
             "summaries": [],
             "iteration": 0,
-            "final_answer": None
+            "final_answer": None,
         }
 
-        # Stream the graph execution
-        # We manually yield events based on graph transitions
         last_iteration = 0
         all_tool_calls = []
+        last_model_response = ""
+        streaming_buffer: list[str] = []
+        is_streaming = False  # currently streaming tokens to UI
 
         try:
             async for event in self.graph.astream_events(initial_state, version="v2"):
                 kind = event["event"]
-                
-                if kind == "on_chain_end":
-                    # Detect node completions
-                    node_name = event.get("metadata", {}).get("langgraph_node")
-                    if not node_name:
-                        continue
-                        
-                    data = event["data"]["output"]
-                    if not data or not isinstance(data, dict):
-                        continue
 
-                    if node_name == "call_model":
-                        last_iteration = data.get("iteration", last_iteration)
-                        last_msg = data["messages"][-1].content
-                        yield LogEvent(message=f"Agent Thinking (Iteration {last_iteration})...", level="thought")
-                        yield LogEvent(message=last_msg, level="thought")
-                        
-                        # Check for tool calls to inform UI
-                        tool_calls = self._parse_tool_calls(last_msg)
-                        for tc in tool_calls:
-                            all_tool_calls.append(tc)
-                            yield LogEvent(message=f"Planning to use {tc.get('tool')} with {json.dumps(tc.get('args'))}", level="tool")
+                # ── Real-time LLM token streaming ──────────────────────────
+                if kind == "on_chat_model_stream":
+                    chunk = event.get("data", {}).get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        token = chunk.content
+                        streaming_buffer.append(token)
+                        # Stop streaming if we detect tool-call XML
+                        if "<tool_call>" in "".join(streaming_buffer):
+                            continue
+                        # Optimistically stream token to UI
+                        if not is_streaming:
+                            is_streaming = True
+                        yield AnswerChunkEvent(chunk=token)
+                    continue
 
-                    elif node_name == "execute_tools":
-                        for summary in data.get("summaries", []):
-                            yield ToolStartEvent(tool=summary.tool, args=summary.args)
-                            yield ToolEndEvent(tool=summary.tool, result=summary.result[:500])
-                            yield LogEvent(message=f"Tool {summary.tool} returned {len(summary.result)} characters", level="info")
+                if kind != "on_chain_end":
+                    continue
 
-                    elif node_name == "generate_final_answer":
-                        yield AnswerStartEvent()
-                        final_answer = data["final_answer"]
-                        # For CLI/TUI consistency, we could split by words but split by lines is safer
-                        for chunk in final_answer.split(" "):
-                            yield AnswerChunkEvent(chunk=chunk + " ")
-                        
-                        yield DoneEvent(
-                            answer=final_answer,
-                            iterations=last_iteration,
-                            tool_calls=all_tool_calls
+                # ── Node completion handling ────────────────────────────────
+                node_name = event.get("metadata", {}).get("langgraph_node")
+                if not node_name:
+                    continue
+
+                data = event.get("data", {}).get("output")
+                if not data or not isinstance(data, dict):
+                    continue
+
+                if node_name == "call_model":
+                    last_iteration = data.get("iteration", last_iteration)
+                    msgs = data.get("messages", [])
+                    if msgs:
+                        last_model_response = msgs[-1].content
+
+                    # Check if model requested tool calls
+                    tool_calls = self._parse_tool_calls(last_model_response)
+                    if tool_calls:
+                        # Model is calling tools — reset any streamed text
+                        if is_streaming:
+                            yield StreamResetEvent()
+                            is_streaming = False
+                        yield LogEvent(
+                            message=f"Agent Thinking (Iteration {last_iteration})...",
+                            level="thought",
                         )
+                    # Reset buffer for next iteration
+                    streaming_buffer = []
+
+                elif node_name == "execute_tools":
+                    for summary in data.get("summaries", []):
+                        yield ToolStartEvent(tool=summary.tool, args=summary.args)
+                        yield ToolEndEvent(tool=summary.tool, result=summary.result[:500])
+                    # Keepalive: signal that agent is generating the answer
+                    # (prevents WebSocket idle timeout during second LLM call)
+                    yield LogEvent(message="Generating answer...", level="thought")
+
+                elif node_name == "generate_final_answer":
+                    final_answer = data.get("final_answer", "")
+                    if final_answer:
+                        last_model_response = final_answer
+
+            # ── Graph completed — emit DoneEvent with final answer ─────────
+            answer = last_model_response or "No answer was generated."
+            answer = re.sub(r"<tool_call>.*?</tool_call>", "", answer, flags=re.DOTALL).strip()
+            if not answer:
+                answer = "No answer was generated."
+            yield DoneEvent(
+                answer=answer,
+                iterations=last_iteration,
+                tool_calls=all_tool_calls,
+            )
         except Exception as e:
             yield ToolErrorEvent(tool="agent", error=str(e))
             yield DoneEvent(answer=f"An error occurred: {str(e)}", iterations=last_iteration)

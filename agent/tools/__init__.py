@@ -7,6 +7,5 @@ from .web_tool import WebSearchTool
 from .polymarket_clob_api import PolymarketCLOBClient
 from .polymarket_wrapper import PolymarketWrapper
 from .polymarket_search_tool import WeatherSearchTool
-from .knowledge_base import KnowledgeBaseTool
 
-__all__ = ["FinancialsTool", "TickerTool", "StockAnalysisTool", "StockGraphTool", "NewsTool", "WebSearchTool", "PolymarketCLOBClient", "PolymarketWrapper", "WeatherSearchTool", "KnowledgeBaseTool"]
+__all__ = ["FinancialsTool", "TickerTool", "StockAnalysisTool", "StockGraphTool", "NewsTool", "WebSearchTool", "PolymarketCLOBClient", "PolymarketWrapper", "WeatherSearchTool"]

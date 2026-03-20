@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /c/Users/HP/Desktop/Upwork_project/modeling/polycode log --oneline)"
+    ]
+  }
+}

@@ -317,14 +317,14 @@ agui = setup_agui(app, langgraph_agent, command_interceptor=_command_interceptor
 # ---------------------------------------------------------------------------
 
 LAYOUT_CSS = """
-/* === Layout — Light Theme === */
+/* === Layout — Dark Trading Terminal Theme === */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #f8fafc;
-  color: #1e293b;
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  background: #0a0d14;
+  color: #e2e8f0;
   height: 100vh;
   overflow: hidden;
 }
@@ -347,8 +347,8 @@ body {
 
 /* === Left Pane (Sidebar) === */
 .left-pane {
-  background: #ffffff;
-  border-right: 1px solid #e2e8f0;
+  background: #0f1117;
+  border-right: 1px solid #1e2a3a;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -359,20 +359,20 @@ body {
 .brand {
   font-size: 1.25rem;
   font-weight: 700;
-  color: #1e293b;
+  color: #10b981;
   text-decoration: none;
   padding-bottom: 0.75rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #1e2a3a;
 }
 
-.brand:hover { color: #3b82f6; }
+.brand:hover { color: #34d399; }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding-bottom: 0.75rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #1e2a3a;
 }
 
 .sidebar-header .brand { border-bottom: none; padding-bottom: 0; }
@@ -382,8 +382,8 @@ body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  background: #3b82f6;
-  color: white;
+  background: #059669;
+  color: #d1fae5;
   padding: 0.15rem 0.4rem;
   border-radius: 0.25rem;
 }
@@ -393,16 +393,16 @@ body {
   width: 100%;
   padding: 0.5rem;
   background: transparent;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed #2a3040;
   border-radius: 0.5rem;
-  color: #3b82f6;
+  color: #10b981;
   font-family: inherit;
   font-size: 0.8rem;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.new-chat-btn:hover { background: #eff6ff; border-color: #93c5fd; }
+.new-chat-btn:hover { background: #0d2818; border-color: #10b981; }
 
 /* === Help Expanders === */
 .help-section {
@@ -410,7 +410,7 @@ body {
   flex-direction: column;
   gap: 0.15rem;
   padding-bottom: 0.5rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #1e2a3a;
 }
 
 .help-toggle {
@@ -421,7 +421,7 @@ body {
   background: none;
   border: none;
   border-radius: 0.375rem;
-  color: #475569;
+  color: #94a3b8;
   font-family: inherit;
   font-size: 0.8rem;
   font-weight: 500;
@@ -430,19 +430,19 @@ body {
   text-align: left;
 }
 
-.help-toggle:hover { background: #f1f5f9; color: #1e293b; }
+.help-toggle:hover { background: #141821; color: #e2e8f0; }
 
 .help-cnt {
   margin-left: auto;
   margin-right: 0.35rem;
   font-size: 0.65rem;
-  color: #94a3b8;
-  background: #f1f5f9;
+  color: #64748b;
+  background: #1a1f2e;
   padding: 0.1rem 0.4rem;
   border-radius: 1rem;
 }
 
-.help-arrow { color: #94a3b8; font-size: 0.65rem; transition: transform 0.2s; }
+.help-arrow { color: #64748b; font-size: 0.65rem; transition: transform 0.2s; }
 .help-toggle.open .help-arrow { transform: rotate(90deg); }
 
 .help-list {
@@ -461,8 +461,8 @@ body {
   background: none;
   border: none;
   border-radius: 0.25rem;
-  color: #3b82f6;
-  font-family: ui-monospace, monospace;
+  color: #10b981;
+  font-family: inherit;
   font-size: 0.7rem;
   cursor: pointer;
   text-align: left;
@@ -472,12 +472,12 @@ body {
   transition: all 0.15s;
 }
 
-.help-item:hover { background: #eff6ff; color: #2563eb; }
+.help-item:hover { background: #0d2818; color: #34d399; }
 
 /* === Sidebar Footer === */
 .sidebar-footer {
   font-size: 0.7rem;
-  color: #94a3b8;
+  color: #475569;
   text-align: center;
   padding-top: 0.5rem;
   margin-top: auto;
@@ -488,7 +488,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #f8fafc;
+  background: #0f1117;
   overflow: hidden;
 }
 
@@ -497,22 +497,22 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
+  background: #141821;
+  border-bottom: 1px solid #1e2a3a;
   min-height: 3rem;
 }
 
 .center-header h2 {
   font-size: 0.95rem;
   font-weight: 600;
-  color: #1e293b;
+  color: #10b981;
 }
 
 .toggle-trace-btn {
   padding: 0.3rem 0.7rem;
   background: transparent;
   color: #64748b;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #2a3040;
   border-radius: 0.375rem;
   font-family: inherit;
   font-size: 0.75rem;
@@ -521,9 +521,9 @@ body {
 }
 
 .toggle-trace-btn:hover {
-  background: #f1f5f9;
-  color: #3b82f6;
-  border-color: #3b82f6;
+  background: #1a1f2e;
+  color: #10b981;
+  border-color: #10b981;
 }
 
 .center-chat {
@@ -537,21 +537,21 @@ body {
 
 .center-chat .chat-container {
   height: 100%; flex: 1; border: none; border-radius: 0;
-  background: #f8fafc; display: flex; flex-direction: column;
+  background: #0f1117; display: flex; flex-direction: column;
 }
 
-.center-chat .chat-messages { background: #f8fafc; flex: 1; }
-.center-chat .chat-input { background: #ffffff; border-top: 1px solid #e2e8f0; }
-.center-chat .chat-input-field { background: #f8fafc; border-color: #e2e8f0; color: #1e293b; }
-.center-chat .chat-input-field:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
-.center-chat .chat-message.chat-assistant .chat-message-content { background: #f8fafc; color: #1e293b; }
-.center-chat .chat-message.chat-user .chat-message-content { background: #3b82f6; color: white; }
-.center-chat .chat-message.chat-tool .chat-message-content { background: #e2e8f0; color: #64748b; }
+.center-chat .chat-messages { background: #0f1117; flex: 1; }
+.center-chat .chat-input { background: #141821; border-top: 1px solid #1e2a3a; }
+.center-chat .chat-input-field { background: #0f1117; border-color: #2a3040; color: #e2e8f0; }
+.center-chat .chat-input-field:focus { border-color: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1); }
+.center-chat .chat-message.chat-assistant .chat-message-content { background: #1a1f2e; color: #e2e8f0; }
+.center-chat .chat-message.chat-user .chat-message-content { background: #064e3b; color: #d1fae5; }
+.center-chat .chat-message.chat-tool .chat-message-content { background: #1a1f2e; color: #64748b; }
 
 /* === Right Pane (Trace) === */
 .right-pane {
-  background: #ffffff;
-  border-left: 1px solid #e2e8f0;
+  background: #0f1117;
+  border-left: 1px solid #1e2a3a;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -562,18 +562,18 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid #1e2a3a;
 }
 
-.right-header h3 { font-size: 0.85rem; font-weight: 600; color: #1e293b; }
+.right-header h3 { font-size: 0.85rem; font-weight: 600; color: #10b981; }
 
 .close-trace-btn {
   background: none; border: none; color: #64748b; cursor: pointer;
   font-size: 1.1rem; padding: 0.2rem;
 }
-.close-trace-btn:hover { color: #1e293b; }
+.close-trace-btn:hover { color: #e2e8f0; }
 
-.right-tabs { display: flex; border-bottom: 1px solid #e2e8f0; }
+.right-tabs { display: flex; border-bottom: 1px solid #1e2a3a; }
 
 .right-tab {
   flex: 1; padding: 0.5rem; text-align: center; font-size: 0.75rem;
@@ -581,7 +581,7 @@ body {
 }
 
 .right-tab:hover { color: #94a3b8; }
-.right-tab.active { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
+.right-tab.active { color: #10b981; border-bottom: 2px solid #10b981; }
 
 .right-content {
   flex: 1; overflow-y: auto; padding: 1rem;
@@ -592,8 +592,8 @@ body {
 .trace-entry {
   display: flex; flex-direction: column; gap: 0.25rem;
   padding: 0.5rem 0.75rem; margin-bottom: 0.5rem;
-  border-left: 3px solid #e2e8f0; border-radius: 0 0.25rem 0.25rem 0;
-  background: #f1f5f9; font-size: 0.8rem;
+  border-left: 3px solid #2a3040; border-radius: 0 0.25rem 0.25rem 0;
+  background: #141821; font-size: 0.8rem;
   animation: trace-in 0.2s ease-out;
 }
 
@@ -603,32 +603,40 @@ body {
 }
 
 .trace-label { color: #94a3b8; font-weight: 500; }
-.trace-detail { color: #64748b; font-size: 0.75rem; font-family: ui-monospace, monospace; word-break: break-all; }
+.trace-detail { color: #64748b; font-size: 0.75rem; font-family: inherit; word-break: break-all; }
 
-.trace-run-start { border-left-color: #3b82f6; }
-.trace-run-start .trace-label { color: #3b82f6; }
+.trace-run-start { border-left-color: #10b981; }
+.trace-run-start .trace-label { color: #10b981; }
 
-.trace-run-end { border-left-color: #16a34a; }
-.trace-run-end .trace-label { color: #16a34a; }
+.trace-run-end { border-left-color: #34d399; }
+.trace-run-end .trace-label { color: #34d399; }
 
-.trace-streaming { border-left-color: #7c3aed; }
-.trace-streaming .trace-label { color: #7c3aed; }
+.trace-streaming { border-left-color: #a78bfa; }
+.trace-streaming .trace-label { color: #a78bfa; }
 
-.trace-tool-active { border-left-color: #d97706; }
-.trace-tool-active .trace-label { color: #d97706; }
+.trace-tool-active { border-left-color: #fbbf24; }
+.trace-tool-active .trace-label { color: #fbbf24; }
 
-.trace-tool-done { border-left-color: #16a34a; }
-.trace-tool-done .trace-label { color: #16a34a; }
+.trace-tool-done { border-left-color: #34d399; }
+.trace-tool-done .trace-label { color: #34d399; }
 
-.trace-done { border-left-color: #16a34a; }
-.trace-done .trace-label { color: #16a34a; }
+.trace-done { border-left-color: #34d399; }
+.trace-done .trace-label { color: #34d399; }
 
-.trace-error { border-left-color: #dc2626; }
-.trace-error .trace-label { color: #dc2626; }
+.trace-error { border-left-color: #f87171; }
+.trace-error .trace-label { color: #f87171; }
 
 #trace-content { font-size: 0.8rem; color: #94a3b8; overflow-y: auto; flex: 1; }
 #artifact-content { display: none; }
 #detail-content { display: none; }
+
+/* === Scrollbars (dark) === */
+.left-pane, .right-content, #trace-content {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3040 transparent;
+}
+.left-pane::-webkit-scrollbar, .right-content::-webkit-scrollbar { width: 5px; }
+.left-pane::-webkit-scrollbar-thumb, .right-content::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
 
 /* === Responsive === */
 @media (max-width: 768px) {

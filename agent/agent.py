@@ -307,11 +307,17 @@ class Agent:
             )
             
             search_tool = WeatherSearchTool(pm_client)
+
+            def _search_weather_sync(**kwargs):
+                import asyncio
+                return asyncio.run(search_tool.search(**kwargs))
+
             tools.append(
                 StructuredTool(
                     name="search_weather_markets",
                     description="Search for weather-related markets on Polymarket by city or keyword. Parameters: query (optional), city (optional).",
-                    func=search_tool.search,
+                    func=_search_weather_sync,
+                    coroutine=search_tool.search,
                     args_schema=None,
                 )
             )

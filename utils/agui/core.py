@@ -173,10 +173,10 @@ class UI:
         _ICON_SEARCH = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>'
 
         cards = [
-            ("Weather Markets", "Search Polymarket weather opportunities", "poly:weather London", "#3b82f6", _ICON_WEATHER),
-            ("Run Backtest", "Backtest weather prediction strategy", "poly:backtest London 7", "#8b5cf6", _ICON_CHART),
+            ("Weather Markets", "Search Polymarket weather opportunities", "poly:weather London", "#10b981", _ICON_WEATHER),
+            ("Run Backtest", "Backtest weather prediction strategy", "poly:backtest London 7", "#6366f1", _ICON_CHART),
             ("Stock Research", "Financials, analyst ratings, news", "fa AAPL", "#f59e0b", _ICON_NEWS),
-            ("Scan Opportunities", "Find high-edge weather markets", "scan", "#10b981", _ICON_SEARCH),
+            ("Scan Opportunities", "Find high-edge weather markets", "scan", "#059669", _ICON_SEARCH),
         ]
 
         card_els = []

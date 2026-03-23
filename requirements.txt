@@ -23,6 +23,7 @@ py-clob-client
 # ── Web UIs (FastHTML: app.py, web_app.py, agui_app.py) ──────────────────
 python-fasthtml
 uvicorn
+starlette<0.45
 
 # ── REST API ─────────────────────────────────────────────────────────────
 fastapi

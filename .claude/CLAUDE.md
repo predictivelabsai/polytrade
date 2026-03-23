@@ -160,6 +160,18 @@ python scripts/setup_polycode_db.py
 # Run tests
 pytest tests/ -v
 
+# Run full regression suite (all backend, tools, agent, DB, chat)
+pytest tests/regression_suite.py -v --tb=short
+
+# Run specific test groups
+pytest tests/regression_suite.py -v -k "stock"      # stock tools only
+pytest tests/regression_suite.py -v -k "weather"     # weather + Polymarket
+pytest tests/regression_suite.py -v -k "agent"       # agent core
+pytest tests/regression_suite.py -v -k "db"          # database ops
+pytest tests/regression_suite.py -v -k "chat"        # chat persistence
+pytest tests/regression_suite.py -v -k "backtest"    # backtest engine
+pytest tests/regression_suite.py -v -k "strategy"    # trading strategy
+
 # Docker Compose (all 3 services)
 docker-compose up --build
 ```

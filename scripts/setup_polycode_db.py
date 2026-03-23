@@ -119,6 +119,31 @@ CREATE INDEX IF NOT EXISTS idx_pnl_snap_time     ON {SCHEMA}.pnl_snapshots(snaps
 CREATE INDEX IF NOT EXISTS idx_trades_type       ON {SCHEMA}.trades(trade_type);
 CREATE INDEX IF NOT EXISTS idx_runs_status       ON {SCHEMA}.runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_started_at   ON {SCHEMA}.runs(started_at);
+
+-- ── chat_conversations ────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS {SCHEMA}.chat_conversations (
+    thread_id   UUID          PRIMARY KEY,
+    user_id     UUID,
+    title       VARCHAR(200)  DEFAULT 'New chat',
+    created_at  TIMESTAMPTZ   DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ   DEFAULT NOW()
+);
+
+-- ── chat_messages ─────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS {SCHEMA}.chat_messages (
+    id          BIGSERIAL     PRIMARY KEY,
+    thread_id   UUID          NOT NULL REFERENCES {SCHEMA}.chat_conversations(thread_id) ON DELETE CASCADE,
+    message_id  UUID          NOT NULL,
+    role        VARCHAR(20)   NOT NULL,
+    content     TEXT          NOT NULL DEFAULT '',
+    metadata    JSONB,
+    created_at  TIMESTAMPTZ   DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_conv_user     ON {SCHEMA}.chat_conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_conv_updated  ON {SCHEMA}.chat_conversations(updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_thread    ON {SCHEMA}.chat_messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_created   ON {SCHEMA}.chat_messages(created_at);
 """
 
 

@@ -217,7 +217,7 @@ _STRUCTURED_PREFIXES = {
     "quote", "scan", "help", "h", "?",
 }
 
-_STREAMING_COMMANDS = {"poly:backtest", "poly:backtestv2", "poly:backtest2", "poly:predict"}
+_STREAMING_COMMANDS = {"poly:backtest", "poly:backtestv2", "poly:backtest2", "poly:predict", "scan"}
 
 
 async def _command_interceptor(msg: str, session):
@@ -638,6 +638,49 @@ body {
 .left-pane::-webkit-scrollbar, .right-content::-webkit-scrollbar { width: 5px; }
 .left-pane::-webkit-scrollbar-thumb, .right-content::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
 
+/* === Conversation List === */
+.conv-section {
+  display: flex;
+  flex-direction: column;
+  max-height: 35vh;
+  overflow-y: auto;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #1e2a3a;
+  scrollbar-width: thin;
+  scrollbar-color: #2a3040 transparent;
+}
+
+.conv-section::-webkit-scrollbar { width: 5px; }
+.conv-section::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
+
+.conv-item {
+  display: block;
+  padding: 0.5rem 0.6rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  text-decoration: none;
+  border-radius: 0.375rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+
+.conv-item:hover { background: #141821; color: #e2e8f0; }
+
+.conv-active {
+  background: #0d2818;
+  color: #10b981;
+  border-left: 2px solid #10b981;
+}
+
+.conv-empty {
+  font-size: 0.75rem;
+  color: #475569;
+  font-style: italic;
+  padding: 0.5rem;
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
   .app-layout { grid-template-columns: 1fr !important; }
@@ -732,6 +775,20 @@ def _left_pane(session):
     # New Chat button
     parts.append(
         Button("+ New Chat", cls="new-chat-btn", onclick="window.location.href='/?new=1'")
+    )
+
+    # Recent conversations
+    parts.append(
+        Div(
+            H4("Recent", style="font-size:0.8rem;font-weight:600;color:#64748b;margin-bottom:0.5rem;"),
+            Div(
+                id="conv-list",
+                hx_get="/agui-conv/list",
+                hx_trigger="load",
+                hx_swap="innerHTML",
+            ),
+            cls="conv-section",
+        )
     )
 
     # Help expanders
@@ -844,9 +901,12 @@ function showTab(tab) {
 # ---------------------------------------------------------------------------
 
 @rt("/")
-def get(session, new: str = ""):
+def get(session, new: str = "", thread: str = ""):
     if new == "1":
         thread_id = str(_uuid.uuid4())
+        session["thread_id"] = thread_id
+    elif thread:
+        thread_id = thread
         session["thread_id"] = thread_id
     else:
         thread_id = session.get("thread_id")
@@ -873,6 +933,25 @@ def get(session, new: str = ""):
         ),
         Script(LAYOUT_JS),
     )
+
+
+@rt("/agui-conv/list")
+async def conv_list(session):
+    """Return the conversation list for the sidebar (DB-backed)."""
+    from utils.agui.chat_store import list_conversations
+    current_tid = session.get("thread_id", "")
+    convs = await list_conversations(user_id=None, limit=20)
+    items = []
+    for c in convs:
+        tid = c["thread_id"]
+        title = c.get("first_msg") or c.get("title") or "New chat"
+        if len(title) > 40:
+            title = title[:40] + "..."
+        cls = "conv-item conv-active" if tid == current_tid else "conv-item"
+        items.append(A(title, href=f"/?thread={tid}", cls=cls))
+    if not items:
+        items.append(Div("No conversations yet", cls="conv-empty"))
+    return Div(*items)
 
 
 @rt("/health")

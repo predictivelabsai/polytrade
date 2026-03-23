@@ -175,6 +175,17 @@ class CommandProcessor:
             self._display_data(f"{ticker} Intraday Graph (GIP)", result)
             return True, None
 
+        elif cmd == "scan":
+            self.console.print(f"[bold cyan]Scanning Polymarket Weather Opportunities...[/bold cyan]")
+            result = await self._exec_tool("scan_weather_opportunities")
+            if isinstance(result, list):
+                self._display_data("Weather Opportunities", result)
+            elif isinstance(result, dict) and "error" in result:
+                self.console.print(f"[red]{result['error']}[/red]")
+            else:
+                self._display_data("Weather Opportunities", result)
+            return True, None
+
         elif user_input.strip().lower().startswith("poly:"):
             full_input = user_input.strip()
             if full_input.lower().startswith("poly: "):
@@ -377,7 +388,7 @@ class CommandProcessor:
                 if len(effective_args) < 2:
                     self.console.print("[red]Error: Usage: poly:simbuy <amount> <market_id>[/red]")
                     return True, None
-                amount = effective_args[0]
+                amount = float(effective_args[0])
                 market_id = effective_args[1]
                 self.console.print(f"[bold cyan]Simulating Buy: {amount} on {market_id}[/bold cyan]")
                 result = await self._exec_tool("simulate_polymarket_trade", amount=amount, market_id=market_id)
@@ -490,12 +501,14 @@ class CommandProcessor:
         """Call a tool function directly from the agent's tool_map."""
         if tool_name not in self.agent.tool_map:
             return {"error": f"Tool {tool_name} not available"}
-        
+
         try:
             tool = self.agent.tool_map[tool_name]
-            # StructuredTool.func is the raw method
             import inspect
-            if inspect.iscoroutinefunction(tool.func):
+            # Prefer the async coroutine if available (avoids asyncio.run inside event loop)
+            if hasattr(tool, 'coroutine') and tool.coroutine is not None:
+                return await tool.coroutine(**kwargs)
+            elif inspect.iscoroutinefunction(tool.func):
                 return await tool.func(**kwargs)
             else:
                 return tool.func(**kwargs)
@@ -710,34 +723,32 @@ class CommandProcessor:
             self.console.print(f"[bold red]No weather markets found for {city}.[/bold red]")
             return
         
-        # Filter markets to only show those with complete data (no N/As)
-        complete_markets = [
-            m for m in markets 
-            if m.get("yes_book") and m.get("yes_book").get("best_bid") is not None
-            and m.get("forecast_at_resolution")
+        # Show all markets that have order book data (forecast is optional)
+        display_markets = [
+            m for m in markets
+            if m.get("yes_book") and m.get("yes_book").get("token_id")
         ]
-        
-        if not complete_markets:
-            self.console.print(f"[bold yellow]Found {len(markets)} markets but none have complete CLOB and forecast data.[/bold yellow]")
-            self.console.print(f"Markets without forecasts cannot be analyzed for edge opportunities.")
+
+        if not display_markets:
+            self.console.print(f"[bold yellow]Found {len(markets)} markets but none have order book data.[/bold yellow]")
             return
-        
+
         # Create Table for console output
         table = Table(
-            title=f"Weather Markets: {city} ({len(complete_markets)} with complete data)", 
-            show_header=True, 
+            title=f"Weather Markets: {city} ({len(display_markets)} markets)",
+            show_header=True,
             header_style="bold magenta",
             expand=True
         )
-        table.add_column("Question", style="dim", no_wrap=False, max_width=45)
+        table.add_column("Question", style="dim", no_wrap=False, max_width=40)
         table.add_column("Liq", justify="right", width=7)
-        table.add_column("YES % (VWAP)", justify="right", style="bright_green", width=12)
-        table.add_column("NO % (VWAP)", justify="right", style="bright_red", width=11)
-        table.add_column("Resolves (UTC)", justify="center", style="cyan", width=14)
-        table.add_column("Forecast @ (UTC)", justify="center", style="magenta", width=14)
-        table.add_column("Temp Forecast", justify="center", style="yellow", width=15)
+        table.add_column("YES %", justify="right", style="bright_green", width=6)
+        table.add_column("NO %", justify="right", style="bright_red", width=6)
+        table.add_column("Resolves", justify="center", style="cyan", width=12)
+        table.add_column("Temp Forecast", justify="center", style="yellow", width=14)
+        table.add_column("Token ID (YES)", style="dim", no_wrap=True, width=20)
 
-        for m in complete_markets:
+        for m in display_markets:
             yes_book = m.get("yes_book") or {}
             no_book = m.get("no_book") or {}
             forecast = m.get("forecast_at_resolution")
@@ -759,31 +770,37 @@ class CommandProcessor:
                 except:
                     resolution_time = m["end_date"][:16]
             
-            # Format forecast time with AM/PM
-            forecast_time = "N/A"
-            if forecast and forecast.get("time"):
-                try:
-                    dt = datetime.fromisoformat(forecast["time"].replace('Z', '+00:00'))
-                    forecast_time = dt.strftime("%b %d %I:%M%p")
-                except:
-                    forecast_time = forecast["time"][:16]
-            
             # Format forecast temperature
-            temp_c = forecast['temperature_c']
-            temp_f = forecast['temperature_f']
-            forecast_str = f"{temp_c}°C/{temp_f}°F"
+            if forecast:
+                temp_c = forecast['temperature_c']
+                temp_f = forecast['temperature_f']
+                forecast_str = f"{temp_c}°C/{temp_f}°F"
+            else:
+                forecast_str = "N/A"
             
+            # Token ID for simbuy/buy
+            token_id = yes_book.get("token_id", "")
+            token_short = f"...{token_id[-12:]}" if token_id else "N/A"
+
             table.add_row(
                 m["question"],
                 f"${m['liquidity']/1000:.1f}k",
                 f"{yes_fair*100:.0f}%",
                 f"{no_fair*100:.0f}%",
                 resolution_time,
-                forecast_time,
-                forecast_str
+                forecast_str,
+                token_short,
             )
         
         self.console.print(table)
+        # Print first 3 full token IDs for easy copy-paste
+        self.console.print(f"\n[bold cyan]Token IDs for trading (use with poly:simbuy / poly:buy):[/bold cyan]")
+        for m in display_markets[:3]:
+            tid = (m.get("yes_book") or {}).get("token_id", "")
+            q = m["question"][:50]
+            if tid:
+                self.console.print(f"  [yellow]{q}[/yellow]")
+                self.console.print(f"  [dim]{tid}[/dim]")
         self.console.print(f"\nPrices shown are volume-weighted fair values from order book depth.")
 
     async def _display_real_portfolio(self, data: Dict[str, Any]):

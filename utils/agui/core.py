@@ -17,6 +17,10 @@ import threading
 import uuid
 
 from .styles import get_chat_styles
+from .chat_store import (
+    save_conversation, save_message,
+    load_conversation_messages, list_conversations,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -264,26 +268,63 @@ class UI:
                     });
                     return rows.join('\\n');
                 }
+                function addToolbar(el, getText) {
+                    if (el.dataset.enhanced === '1') return;
+                    el.dataset.enhanced = '1';
+                    // Remove any existing toolbar
+                    var prev = el.previousElementSibling;
+                    if (prev && prev.classList.contains('table-toolbar')) prev.remove();
+                    var toolbar = document.createElement('div');
+                    toolbar.className = 'table-toolbar';
+                    var copyBtn = document.createElement('button');
+                    copyBtn.textContent = 'Copy';
+                    copyBtn.className = 'table-action-btn';
+                    copyBtn.onclick = function() {
+                        navigator.clipboard.writeText(getText()).then(function() {
+                            copyBtn.textContent = 'Copied!';
+                            setTimeout(function(){ copyBtn.textContent = 'Copy'; }, 1500);
+                        });
+                    };
+                    var dlBtn = document.createElement('button');
+                    dlBtn.textContent = 'Download CSV';
+                    dlBtn.className = 'table-action-btn';
+                    dlBtn.onclick = function() {
+                        var data = getText();
+                        var blob = new Blob([data], {type: 'text/csv'});
+                        var url = URL.createObjectURL(blob);
+                        var a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'polytrade-data.csv';
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    };
+                    toolbar.appendChild(copyBtn);
+                    toolbar.appendChild(dlBtn);
+                    el.parentNode.insertBefore(toolbar, el);
+                }
                 function enhanceTables(container) {
-                    container.querySelectorAll('table').forEach(function(table) {
-                        if (table.dataset.enhanced) return;
-                        table.dataset.enhanced = '1';
-                        var toolbar = document.createElement('div');
-                        toolbar.className = 'table-toolbar';
-                        var copyBtn = document.createElement('button');
-                        copyBtn.textContent = 'Copy CSV';
-                        copyBtn.className = 'table-action-btn';
-                        copyBtn.onclick = function() {
-                            var csv = tableToCSV(table);
-                            navigator.clipboard.writeText(csv).then(function() {
-                                copyBtn.textContent = 'Copied!';
-                                setTimeout(function(){ copyBtn.textContent = 'Copy CSV'; }, 1500);
-                            });
-                        };
-                        toolbar.appendChild(copyBtn);
-                        table.parentNode.insertBefore(toolbar, table);
+                    var root = container || document;
+                    // HTML tables
+                    root.querySelectorAll('table').forEach(function(table) {
+                        addToolbar(table, function(){ return tableToCSV(table); });
+                    });
+                    // Pre blocks (Rich console output with pipes or box-drawing chars)
+                    root.querySelectorAll('pre').forEach(function(pre) {
+                        if (pre.dataset.enhanced === '1') return;
+                        var txt = pre.textContent || '';
+                        var hasTable = (txt.indexOf('|') > -1 || txt.indexOf('\u2502') > -1 || txt.indexOf('\u250c') > -1);
+                        var lines = txt.split(String.fromCharCode(10));
+                        if (hasTable && lines.length >= 3) {
+                            addToolbar(pre, function(){ return pre.textContent; });
+                            // Mark inner code as enhanced too to prevent duplicates
+                            pre.querySelectorAll('code').forEach(function(c){ c.dataset.enhanced = '1'; });
+                        }
                     });
                 }
+                // Run enhanceTables on full page every 2s to catch all new content
+                setInterval(function() {
+                    enhanceTables(document.getElementById('chat-messages'));
+                }, 2000);
                 // Auto-render .marked elements
                 if (window.marked) {
                     new MutationObserver(function() {
@@ -354,6 +395,23 @@ class AGUIThread:
         self.ui = UI(self.thread_id, autoscroll=True)
         self._suggestions: list[str] = []
         self._command_interceptor = None
+        self._loaded = False
+
+    async def _ensure_loaded(self):
+        """Load messages from DB on first access."""
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            rows = await load_conversation_messages(self.thread_id)
+            self._messages = rows
+        except Exception:
+            pass
+
+    async def _refresh_conv_list(self):
+        """Push an OOB swap to refresh the sidebar conversation list."""
+        await self.send(Div(id="conv-list", hx_get="/agui-conv/list",
+                            hx_trigger="load", hx_swap="innerHTML", hx_swap_oob="outerHTML"))
 
     def subscribe(self, connection_id, send):
         self._connections[connection_id] = send
@@ -392,6 +450,8 @@ class AGUIThread:
         await self.send(el)
 
     async def _handle_message(self, msg: str, session):
+        await self._ensure_loaded()
+
         # Block double-submit
         await self._send_js(_GUARD_ENABLE_JS)
 
@@ -432,6 +492,15 @@ class AGUIThread:
         # 1. Save user message
         user_dict = {"role": "user", "content": msg, "message_id": user_mid}
         self._messages.append(user_dict)
+        try:
+            title = msg[:80] if len(self._messages) == 1 else None
+            await save_conversation(self.thread_id, user_id=self._user_id, title=title)
+        except Exception:
+            pass
+        try:
+            await save_message(self.thread_id, "user", msg, user_mid)
+        except Exception:
+            pass
 
         # 2. Send user bubble
         await self.send(Div(
@@ -480,11 +549,13 @@ class AGUIThread:
             hx_swap_oob="beforeend",
         ))
 
-        # 5. Convert message history to LangChain format
+        # 5. Convert message history to LangChain format (skip empty content)
         lc_messages = []
         for m in self._messages:
             role = m.get("role", "user")
             content = m.get("content", "")
+            if not content or not content.strip():
+                continue
             if role == "user":
                 lc_messages.append(HumanMessage(content=content))
             else:
@@ -587,6 +658,11 @@ class AGUIThread:
         # 8. Save assistant message
         asst_dict = {"role": "assistant", "content": full_response, "message_id": asst_mid}
         self._messages.append(asst_dict)
+        try:
+            await save_message(self.thread_id, "assistant", full_response, asst_mid)
+        except Exception:
+            pass
+        await self._refresh_conv_list()
 
         # Re-enable input
         await self.send(self.ui._clear_input())
@@ -619,6 +695,15 @@ class AGUIThread:
         user_mid = str(uuid.uuid4())
         user_dict = {"role": "user", "content": msg, "message_id": user_mid}
         self._messages.append(user_dict)
+        try:
+            title = msg[:80] if len(self._messages) == 1 else None
+            await save_conversation(self.thread_id, user_id=self._user_id, title=title)
+        except Exception:
+            pass
+        try:
+            await save_message(self.thread_id, "user", msg, user_mid)
+        except Exception:
+            pass
 
         # Send user message + trace
         await self.send(Div(
@@ -684,6 +769,11 @@ class AGUIThread:
         # Store message
         asst_dict = {"role": "assistant", "content": result, "message_id": asst_id}
         self._messages.append(asst_dict)
+        try:
+            await save_message(self.thread_id, "assistant", result, asst_id)
+        except Exception:
+            pass
+        await self._refresh_conv_list()
 
         # Re-enable input + suggestions
         await self.send(self.ui._clear_input())
@@ -713,6 +803,15 @@ class AGUIThread:
         user_mid = str(uuid.uuid4())
         user_dict = {"role": "user", "content": msg, "message_id": user_mid}
         self._messages.append(user_dict)
+        try:
+            title = msg[:80] if len(self._messages) == 1 else None
+            await save_conversation(self.thread_id, user_id=self._user_id, title=title)
+        except Exception:
+            pass
+        try:
+            await save_message(self.thread_id, "user", msg, user_mid)
+        except Exception:
+            pass
 
         await self.send(Div(
             Div(
@@ -777,15 +876,23 @@ class AGUIThread:
                 from components.command_processor import CommandProcessor
                 from agent.agent import Agent
                 from agent.types import AgentConfig
-                import os
+                from rich.console import Console
+                import io, os
                 config = AgentConfig(
                     model=os.getenv("MODEL"),
                     model_provider=os.getenv("MODEL_PROVIDER"),
                 )
                 agent = Agent.create(config)
                 cp = CommandProcessor(agent)
+                # Capture Rich output to buffer
+                buf = io.StringIO()
+                cp.console = Console(file=buf, force_terminal=False, width=120, no_color=True)
                 _, _ = await cp.process_command(sc.raw_command)
-                result_holder["value"] = "Command executed."
+                output = buf.getvalue().strip()
+                if output:
+                    result_holder["value"] = f"```\n{output}\n```"
+                else:
+                    result_holder["value"] = "Command executed."
             except Exception as e:
                 import traceback
                 result_holder["error"] = traceback.format_exc()
@@ -801,20 +908,27 @@ class AGUIThread:
             lines = log_capture.get_lines()
             if len(lines) != prev_line_count:
                 prev_line_count = len(lines)
-                display_lines = lines[-100:]
-                log_text = "\n".join(display_lines) if display_lines else "Initializing..."
+                # Show simple status in chat bubble (not all log lines)
+                status_text = f"Running... ({prev_line_count} steps processed)"
                 try:
                     await self.send(Pre(
-                        log_text,
+                        status_text,
                         id=log_pre_id,
                         cls="agui-log-pre",
                         hx_swap_oob="outerHTML",
                     ))
-                    await self._send_js(
-                        f"var lc=document.getElementById('{log_console_id}');"
-                        "if(lc)lc.scrollTop=lc.scrollHeight;"
-                        + _SCROLL_CHAT_JS
-                    )
+                    # Stream last few log lines to trace pane only
+                    recent = lines[-5:]
+                    for line in recent:
+                        await self.send(Div(
+                            Div(
+                                Span(line, cls="trace-detail"),
+                                cls="trace-entry trace-streaming",
+                            ),
+                            id="trace-content",
+                            hx_swap_oob="beforeend",
+                        ))
+                    await self._send_js(_SCROLL_CHAT_JS)
                 except Exception:
                     break
 
@@ -851,6 +965,11 @@ class AGUIThread:
 
             asst_dict = {"role": "assistant", "content": final_result, "message_id": asst_id}
             self._messages.append(asst_dict)
+            try:
+                await save_message(self.thread_id, "assistant", final_result, asst_id)
+            except Exception:
+                pass
+            await self._refresh_conv_list()
 
             # Re-enable input
             await self.send(self.ui._clear_input())
@@ -896,8 +1015,9 @@ class AGUISetup:
             await self._threads[thread_id]._handle_message(msg, session)
 
         @self.app.route("/agui/messages/{thread_id}")
-        def agui_messages(thread_id: str, session):
+        async def agui_messages(thread_id: str, session):
             thread = self.thread(thread_id, session)
+            await thread._ensure_loaded()
             if thread._messages:
                 return thread.ui._render_messages(thread._messages)
             return Div(thread.ui._render_welcome(), id="chat-messages", cls="chat-messages")

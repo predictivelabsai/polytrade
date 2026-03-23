@@ -1,36 +1,34 @@
-# PolyTrade Deployment — Coolify + Hetzner
+# PolyTrade Deployment — Coolify + Hostinger VPS
 
-## Domains
-- `polytrade.dev` — Web Shell (web_app.py)
-- `polytrade.chat` — AG-UI Chat (agui_app.py)
-- `api.polytrade.dev` — REST API (api/main.py)
+## Domain
+All services use a single domain: `polytrade.chat`
 
-### Step 1: Register Domains
-- Register `polytrade.dev` and `polytrade.chat` at your domain registrar (IONOS, etc.)
+| Service | Domain | Port |
+|---------|--------|------|
+| AG-UI Chat | `polytrade.chat` / `www.polytrade.chat` | 4003 |
+| Web Shell | `app.polytrade.chat` | 4002 |
+| REST API | `api.polytrade.chat` | 4000 |
+
+### Step 1: Register Domain
+Register `polytrade.chat` at your domain registrar (IONOS, etc.)
 
 ### Step 2: Add DNS Records in IONOS
-Add A records for both domains pointing to your Hetzner/Coolify server IP:
-
-**polytrade.dev:**
+Add A records pointing to your Hostinger VPS IP:
 
 | Type | Host | Value | TTL |
 |------|------|-------|-----|
-| A | @ | `<HETZNER_IP>` | 3600 |
-| A | api | `<HETZNER_IP>` | 3600 |
-| A | www | `<HETZNER_IP>` | 3600 |
-
-**polytrade.chat:**
-
-| Type | Host | Value | TTL |
-|------|------|-------|-----|
-| A | @ | `<HETZNER_IP>` | 3600 |
+| A | @ | `<VPS_IP>` | 3600 |
+| A | www | `<VPS_IP>` | 3600 |
+| A | api | `<VPS_IP>` | 3600 |
+| A | app | `<VPS_IP>` | 3600 |
 
 ### Step 3: Deploy on Coolify
 
-1. **Connect GitHub repo** in Coolify:
-   - Go to Coolify dashboard → New Resource → Docker Compose
-   - Connect to your GitHub repo: `predictivelabsai/polycode`
-   - Branch: `dev` (or `main` after merge)
+1. **Add resource** in Coolify:
+   - New Resource → Public Repository
+   - URL: `https://github.com/predictivelabsai/polytrade`
+   - Branch: `main`
+   - Build Pack: **Docker Compose**
 
 2. **Set environment variables** in Coolify:
    All env vars from `.env.example`:
@@ -49,9 +47,9 @@ Add A records for both domains pointing to your Hetzner/Coolify server IP:
    ```
 
 3. **Configure domains** in Coolify for each service:
-   - `api` service → `api.polytrade.dev` (port 4000)
-   - `web` service → `polytrade.dev` (port 4002)
-   - `agui` service → `polytrade.chat` (port 4003)
+   - `api` service → `https://api.polytrade.chat` (port 4000)
+   - `web` service → `https://app.polytrade.chat` (port 4002)
+   - `agui` service → `https://polytrade.chat,https://www.polytrade.chat` (port 4003)
 
 4. **Enable SSL** — Coolify auto-provisions Let's Encrypt certificates
 
@@ -61,23 +59,15 @@ Add A records for both domains pointing to your Hetzner/Coolify server IP:
 
 ```bash
 # Health checks
-curl https://api.polytrade.dev/health
-curl https://polytrade.dev/health
+curl https://api.polytrade.chat/health
+curl https://app.polytrade.chat/health
 curl https://polytrade.chat/health
 
 # Test API
-curl -X POST https://api.polytrade.dev/agent/run \
+curl -X POST https://api.polytrade.chat/agent/run \
   -H "Content-Type: application/json" \
   -d '{"query":"What is AAPL stock price?"}'
 ```
-
-## Services
-
-| Service | Dockerfile | Port | Domain |
-|---------|-----------|------|--------|
-| REST API | Dockerfile.api | 4000 | api.polytrade.dev |
-| Web Shell | Dockerfile.fasthtml | 4002 | polytrade.dev |
-| AG-UI Chat | Dockerfile.agui | 4003 | polytrade.chat |
 
 ## Local Testing
 

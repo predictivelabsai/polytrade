@@ -281,11 +281,20 @@ class Agent:
             weather_client = WeatherClient(api_key=tomorrow_api_key)
             pm_wrapper = PolymarketWrapper(pm_client, clob_client, weather_client)
 
+            def _make_sync(async_fn):
+                """Create a sync wrapper for an async function (fallback for non-async callers)."""
+                import asyncio, functools
+                @functools.wraps(async_fn)
+                def wrapper(*args, **kwargs):
+                    return asyncio.run(async_fn(*args, **kwargs))
+                return wrapper
+
             tools.append(
                 StructuredTool(
                     name="scan_weather_opportunities",
                     description="Scan Polymarket for weather-related trading opportunities. Returns a list of markets with calculated edge and confidence.",
-                    func=pm_wrapper.scan_weather_opportunities,
+                    func=_make_sync(pm_wrapper.scan_weather_opportunities),
+                    coroutine=pm_wrapper.scan_weather_opportunities,
                     args_schema=None,
                 )
             )
@@ -293,7 +302,8 @@ class Agent:
                 StructuredTool(
                     name="place_real_order",
                     description="Place a REAL order on Polymarket. Parameters: amount (USDC), token_id (CLOB Token ID), side (optional, 'BUY' or 'SELL').",
-                    func=pm_client.create_order,
+                    func=_make_sync(pm_client.create_order),
+                    coroutine=pm_client.create_order,
                     args_schema=None,
                 )
             )
@@ -301,22 +311,18 @@ class Agent:
                 StructuredTool(
                     name="simulate_polymarket_trade",
                     description="Simulate a trade on Polymarket by walking the CLOB order book for a specific amount. Parameters: amount (USDC), market_id (Token ID).",
-                    func=pm_wrapper.simulate_polymarket_trade,
+                    func=_make_sync(pm_wrapper.simulate_polymarket_trade),
+                    coroutine=pm_wrapper.simulate_polymarket_trade,
                     args_schema=None,
                 )
             )
-            
+
             search_tool = WeatherSearchTool(pm_client)
-
-            def _search_weather_sync(**kwargs):
-                import asyncio
-                return asyncio.run(search_tool.search(**kwargs))
-
             tools.append(
                 StructuredTool(
                     name="search_weather_markets",
                     description="Search for weather-related markets on Polymarket by city or keyword. Parameters: query (optional), city (optional).",
-                    func=_search_weather_sync,
+                    func=_make_sync(search_tool.search),
                     coroutine=search_tool.search,
                     args_schema=None,
                 )
@@ -347,14 +353,17 @@ class Agent:
         so the UI can clear any optimistically-streamed text.
         """
 
-        # Convert chat history to messages
+        # Convert chat history to messages (skip empty content to avoid API errors)
         messages = []
         if chat_history:
             for item in chat_history:
+                content = (item.get("content") or "").strip()
+                if not content:
+                    continue
                 if item.get("role") == "user":
-                    messages.append(HumanMessage(content=item.get("content", "")))
+                    messages.append(HumanMessage(content=content))
                 elif item.get("role") == "assistant":
-                    messages.append(AIMessage(content=item.get("content", "")))
+                    messages.append(AIMessage(content=content))
 
         initial_state = {
             "messages": messages,

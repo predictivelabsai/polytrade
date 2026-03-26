@@ -34,6 +34,33 @@ from components.command_processor import CommandProcessor
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Google OAuth setup (optional — gracefully skip if no creds)
+# ---------------------------------------------------------------------------
+
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+_oauth_enabled = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+_authlib_oauth = None
+if _oauth_enabled:
+    from authlib.integrations.starlette_client import OAuth as AuthlibOAuth
+    _authlib_oauth = AuthlibOAuth()
+    _authlib_oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+_GOOGLE_SVG = """<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+<path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/>
+<path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/>
+<path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9s.38 1.572.957 3.042l3.007-2.332z" fill="#FBBC05"/>
+<path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+</svg>"""
+
 
 # ---------------------------------------------------------------------------
 # Rich console output capture — redirect Rich prints to string
@@ -292,16 +319,20 @@ def _help_html():
 # Nav bar
 # ---------------------------------------------------------------------------
 
-def _nav():
-    """Top navigation bar (same layout as AlpaTrade)."""
-    model = os.getenv("MODEL", "?")
-    provider = os.getenv("MODEL_PROVIDER", "?")
+def _nav(session=None):
+    """Top navigation bar."""
+    user = session.get("user") if session else None
     links = [
         A("Home", href="/"),
         A("Guide", href="/guide"),
-        A("Dashboard", href="/"),
-        Span(f"{provider}/{model}", style="color: var(--pico-muted-color); font-size: 0.8em;"),
     ]
+    if user:
+        name = user.get("display_name") or user.get("email", "User")
+        links.append(A(name, href="/profile", style="color: #10b981;"))
+        links.append(A("Logout", href="/logout"))
+    else:
+        links.append(A("Login", href="/signin"))
+        links.append(A("Sign Up", href="/register"))
     return Nav(
         A("PolyTrade", href="/", cls="nav-brand"),
         Div(*links, cls="nav-links"),
@@ -374,16 +405,10 @@ The agent has access to all tools above and will use them automatically.
 
 @rt("/")
 def get(session):
-    model = os.getenv("MODEL", "?")
-    provider = os.getenv("MODEL_PROVIDER", "?")
     return (
         Title("PolyTrade"),
         Main(
-            _nav(),
-            Div(
-                Span(f"{provider}/{model}", cls="status-bar"),
-                style="text-align: right; margin-bottom: 0.5rem;",
-            ),
+            _nav(session),
             Div(_help_html(), id="output"),
             Form(
                 Input(type="text", name="command",
@@ -405,7 +430,7 @@ def get_guide(session):
     return (
         Title("PolyTrade — Guide"),
         Main(
-            _nav(),
+            _nav(session),
             Div(_GUIDE_MD, cls="marked"),
         ),
     )
@@ -672,7 +697,23 @@ _WEB_AUTH_CSS = """
 .auth-alt { text-align:center; margin-top:1rem; font-size:0.8rem; color:#64748b; }
 .auth-alt a { color:#10b981; text-decoration:none; }
 .auth-alt a:hover { text-decoration:underline; }
+.google-btn {
+  display:flex; align-items:center; justify-content:center; gap:0.5rem;
+  width:100%; padding:0.5rem; background:#1a1f2e; border:1px solid #2a3040;
+  border-radius:0.375rem; color:#e2e8f0; text-decoration:none;
+  font-size:0.8rem; font-family:inherit; cursor:pointer; transition:all 0.2s;
+  margin-bottom:0.75rem;
+}
+.google-btn:hover { background:#2a3040; border-color:#4285F4; }
+.google-btn svg { flex-shrink:0; }
+.auth-divider { text-align:center; color:#475569; font-size:0.7rem; margin:0.25rem 0 0.75rem; }
+.profile-page { max-width:500px; margin:2rem auto; padding:2rem; }
+.profile-page h2 { color:#10b981; margin-bottom:1rem; }
+.profile-page h3 { color:#94a3b8; font-size:0.9rem; margin:1.5rem 0 0.75rem; }
+.profile-page label { color:#64748b; font-size:0.8rem; display:block; margin-bottom:0.25rem; }
+.profile-form { display:flex; flex-direction:column; gap:0.5rem; }
 """
+
 
 @rt("/signin")
 async def signin(request, session, email: str = "", msg: str = ""):
@@ -687,23 +728,26 @@ async def signin(request, session, email: str = "", msg: str = ""):
             from starlette.responses import RedirectResponse
             return RedirectResponse("/", status_code=303)
         msg = "Invalid email or password."
+    parts = [H2("PolyTrade Login")]
+    if msg:
+        parts.append(P(msg, cls="auth-error"))
+    if _oauth_enabled:
+        parts.append(A(NotStr(_GOOGLE_SVG), " Sign in with Google", href="/login", cls="google-btn"))
+        parts.append(Div("or", cls="auth-divider"))
+    parts.append(Form(
+        Input(type="email", name="email", placeholder="Email", required=True, value=email),
+        Input(type="password", name="password", placeholder="Password", required=True),
+        Button("Login", type="submit"),
+        method="post", action="/signin",
+    ))
+    parts.append(Div(A("Forgot password?", href="/forgot-password"), cls="auth-alt"))
+    parts.append(Div("No account? ", A("Sign up", href="/register"), cls="auth-alt"))
     return (
         Title("Sign In — PolyTrade"),
         Style(_WEB_AUTH_CSS),
-        Div(Div(
-            H2("PolyTrade Login"),
-            P(msg, cls="auth-error") if msg else None,
-            Form(
-                Input(type="email", name="email", placeholder="Email", required=True, value=email),
-                Input(type="password", name="password", placeholder="Password", required=True),
-                Button("Login", type="submit"),
-                method="post", action="/signin",
-            ),
-            Div(A("Forgot password?", href="/forgot"), cls="auth-alt"),
-            Div("No account? ", A("Sign up", href="/register"), cls="auth-alt"),
-            cls="auth-card",
-        ), cls="auth-page"),
+        Div(Div(*parts, cls="auth-card"), cls="auth-page"),
     )
+
 
 @rt("/register")
 async def register(request, session, msg: str = ""):
@@ -724,29 +768,312 @@ async def register(request, session, msg: str = ""):
                 from starlette.responses import RedirectResponse
                 return RedirectResponse("/", status_code=303)
             msg = "Email already registered."
+    parts = [H2("Create Account")]
+    if msg:
+        parts.append(P(msg, cls="auth-error"))
+    if _oauth_enabled:
+        parts.append(A(NotStr(_GOOGLE_SVG), " Sign up with Google", href="/login", cls="google-btn"))
+        parts.append(Div("or", cls="auth-divider"))
+    parts.append(Form(
+        Input(type="text", name="display_name", placeholder="Name (optional)"),
+        Input(type="email", name="email", placeholder="Email", required=True),
+        Input(type="password", name="password", placeholder="Password (min 6 chars)", required=True),
+        Button("Sign Up", type="submit"),
+        method="post", action="/register",
+    ))
+    parts.append(Div("Have an account? ", A("Login", href="/signin"), cls="auth-alt"))
     return (
         Title("Sign Up — PolyTrade"),
         Style(_WEB_AUTH_CSS),
-        Div(Div(
-            H2("Create Account"),
-            P(msg, cls="auth-error") if msg else None,
-            Form(
-                Input(type="text", name="display_name", placeholder="Name (optional)"),
-                Input(type="email", name="email", placeholder="Email", required=True),
-                Input(type="password", name="password", placeholder="Password (min 6 chars)", required=True),
-                Button("Sign Up", type="submit"),
-                method="post", action="/register",
-            ),
-            Div("Have an account? ", A("Login", href="/signin"), cls="auth-alt"),
-            cls="auth-card",
-        ), cls="auth-page"),
+        Div(Div(*parts, cls="auth-card"), cls="auth-page"),
     )
 
-@rt("/web-logout")
-def web_logout(session):
+
+@rt("/sso")
+async def sso_login(session, token: str = ""):
+    """Cross-app SSO: validate token from agui_app and auto-login."""
+    from starlette.responses import RedirectResponse
+    if not token:
+        return RedirectResponse("/signin", status_code=303)
+    from utils.auth import verify_cross_app_token, get_user_by_email, session_login
+    payload = verify_cross_app_token(token)
+    if not payload:
+        return RedirectResponse("/signin?error=Invalid+or+expired+token", status_code=303)
+    user = await get_user_by_email(payload["email"])
+    if not user:
+        return RedirectResponse("/signin?error=User+not+found", status_code=303)
+    session_login(session, user)
+    return RedirectResponse("/", status_code=303)
+
+
+@rt("/logout")
+def logout(session):
+    """Sign out — clear session."""
     session.pop("user", None)
     from starlette.responses import RedirectResponse
     return RedirectResponse("/signin", status_code=303)
+
+
+@rt("/web-logout")
+def web_logout(session):
+    """Legacy logout endpoint — redirects to /logout."""
+    return logout(session)
+
+
+@rt("/forgot-password")
+async def forgot_password(request, session, email: str = "", msg: str = ""):
+    """Forgot password page — show form or process email."""
+    if request.method == "POST" and email:
+        from utils.auth import create_password_reset_token
+        from utils.email_util import send_email_to
+        token = await create_password_reset_token(email)
+        if token:
+            scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+            host = request.headers.get("host", request.url.netloc)
+            reset_url = f"{scheme}://{host}/reset-password?token={token}"
+            body_html = f"""
+            <div style="font-family: -apple-system, sans-serif; max-width: 500px; margin: 0 auto;">
+              <h2>Reset Your Password</h2>
+              <p>You requested a password reset for your PolyTrade account.</p>
+              <p><a href="{reset_url}"
+                    style="display:inline-block; padding:12px 24px; background:#059669;
+                           color:#fff; text-decoration:none; border-radius:6px;">
+                Reset Password
+              </a></p>
+              <p style="color:#6c757d; font-size:13px;">
+                This link expires in 1 hour. If you didn't request this, ignore this email.
+              </p>
+            </div>
+            """
+            send_email_to(email, "PolyTrade — Password Reset", body_html)
+        msg = "If that email is registered, you will receive a reset link."
+    return (
+        Title("Forgot Password — PolyTrade"),
+        Style(_WEB_AUTH_CSS),
+        Div(
+            Div(
+                H2("Forgot Password"),
+                P(msg, cls="auth-success") if msg else None,
+                Form(
+                    Input(type="email", name="email", placeholder="Your email address",
+                          required=True, value=email),
+                    Button("Send Reset Link", type="submit"),
+                    method="post", action="/forgot-password",
+                ),
+                A("Back to login", href="/signin", style="display:block;text-align:center;margin-top:1rem;color:#10b981;font-size:0.8rem;text-decoration:none;"),
+                cls="auth-card",
+            ),
+            cls="auth-page",
+        ),
+    )
+
+
+@rt("/reset-password")
+async def reset_password(request, session, token: str = "", msg: str = ""):
+    """Reset password page — verify token and update password."""
+    if request.method == "POST":
+        form = await request.form()
+        password = form.get("password", "")
+        token = form.get("token", token)
+        if len(password) < 6:
+            msg = "Password must be at least 6 characters."
+        else:
+            from utils.auth import verify_and_consume_reset_token, update_password
+            user = await verify_and_consume_reset_token(token)
+            if user:
+                await update_password(user["user_id"], password)
+                from starlette.responses import RedirectResponse
+                return RedirectResponse("/signin?msg=Password+reset+successfully.+Please+login.", status_code=303)
+            else:
+                msg = "Invalid or expired reset link."
+    if not token:
+        msg = "Missing reset token."
+    return (
+        Title("Reset Password — PolyTrade"),
+        Style(_WEB_AUTH_CSS),
+        Div(
+            Div(
+                H2("Reset Password"),
+                P(msg, cls="auth-error") if msg else None,
+                Form(
+                    Hidden(name="token", value=token),
+                    Input(type="password", name="password", placeholder="New password (min 6 chars)", required=True),
+                    Button("Reset Password", type="submit"),
+                    method="post", action=f"/reset-password?token={token}",
+                ),
+                A("Back to login", href="/signin", style="display:block;text-align:center;margin-top:1rem;color:#10b981;font-size:0.8rem;text-decoration:none;"),
+                cls="auth-card",
+            ),
+            cls="auth-page",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Profile page
+# ---------------------------------------------------------------------------
+
+@rt("/profile")
+async def profile_page(session, msg: str = ""):
+    user = session.get("user")
+    if not user:
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/signin")
+
+    parts = [H2("Profile")]
+    if msg:
+        is_err = "fail" in msg.lower() or "error" in msg.lower() or "cannot" in msg.lower()
+        parts.append(P(msg, cls="auth-error" if is_err else "auth-success"))
+
+    # Account info
+    parts.extend([
+        H3("Account Info"),
+        Form(
+            Label("Email"),
+            Input(type="email", value=user.get("email", ""), disabled=True,
+                  style="opacity:0.6;cursor:not-allowed;"),
+            Label("Display Name"),
+            Input(type="text", name="display_name", value=user.get("display_name", ""),
+                  placeholder="Your name", required=True),
+            Button("Update Name", type="submit"),
+            method="post", action="/profile/name", cls="profile-form",
+        ),
+    ])
+
+    # Change password — check if user has a password set
+    from utils.auth import get_user_by_id
+    db_user = await get_user_by_id(user["user_id"])
+    has_pw = db_user and db_user.get("password_hash")
+
+    if has_pw:
+        parts.extend([
+            H3("Change Password"),
+            Form(
+                Input(type="password", name="current_password", placeholder="Current password", required=True),
+                Input(type="password", name="new_password", placeholder="New password (min 6 chars)", required=True),
+                Input(type="password", name="confirm_password", placeholder="Confirm new password", required=True),
+                Button("Change Password", type="submit"),
+                method="post", action="/profile/password", cls="profile-form",
+            ),
+        ])
+    else:
+        parts.extend([
+            H3("Set Password"),
+            P("You signed in with Google. Set a password to also log in with email.",
+              style="color:#64748b;font-size:0.8rem;margin-bottom:0.5rem;"),
+            Form(
+                Input(type="password", name="new_password", placeholder="New password (min 6 chars)", required=True),
+                Input(type="password", name="confirm_password", placeholder="Confirm new password", required=True),
+                Button("Set Password", type="submit"),
+                method="post", action="/profile/password", cls="profile-form",
+            ),
+        ])
+
+    parts.append(Div(A("Back to home", href="/"), cls="auth-alt", style="margin-top:1.5rem;"))
+
+    return (
+        Title("Profile — PolyTrade"),
+        Style(_WEB_AUTH_CSS),
+        Style("body { background:#0a0d14; color:#e2e8f0; font-family:'SF Mono',ui-monospace,monospace; }"),
+        Div(*parts, cls="profile-page"),
+    )
+
+
+@rt("/profile/name", methods=["POST"])
+async def profile_update_name(session, display_name: str = ""):
+    user = session.get("user")
+    if not user:
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/signin")
+    if not display_name.strip():
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/profile?msg=Display+name+cannot+be+empty", status_code=303)
+    from utils.auth import update_display_name
+    ok = await update_display_name(user["user_id"], display_name)
+    if ok:
+        session["user"]["display_name"] = display_name.strip()
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(f"/profile?msg={'Name+updated' if ok else 'Failed+to+update'}", status_code=303)
+
+
+@rt("/profile/password", methods=["POST"])
+async def profile_change_password(session, current_password: str = "", new_password: str = "", confirm_password: str = ""):
+    from starlette.responses import RedirectResponse
+    from utils.auth import authenticate, update_password, get_user_by_id
+    user = session.get("user")
+    if not user:
+        return RedirectResponse("/signin")
+    if not new_password:
+        return RedirectResponse("/profile?msg=New+password+required", status_code=303)
+    if new_password != confirm_password:
+        return RedirectResponse("/profile?msg=Passwords+do+not+match", status_code=303)
+    if len(new_password) < 6:
+        return RedirectResponse("/profile?msg=Password+must+be+6%2B+characters", status_code=303)
+    # Check if user has existing password (Google-only users don't)
+    db_user = await get_user_by_id(user["user_id"])
+    has_pw = db_user and db_user.get("password_hash")
+    if has_pw:
+        if not current_password:
+            return RedirectResponse("/profile?msg=Current+password+required", status_code=303)
+        auth = await authenticate(user["email"], current_password)
+        if not auth:
+            return RedirectResponse("/profile?msg=Current+password+incorrect", status_code=303)
+    await update_password(user["user_id"], new_password)
+    return RedirectResponse("/profile?msg=Password+updated+successfully", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth routes
+# ---------------------------------------------------------------------------
+
+if _oauth_enabled:
+    @rt("/login")
+    async def login_get(request):
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("host", request.url.netloc)
+        redirect_uri = f"{scheme}://{host}/auth/callback"
+        return await _authlib_oauth.google.authorize_redirect(request, redirect_uri)
+
+    @rt("/auth/callback")
+    async def auth_callback(request, session):
+        try:
+            token = await _authlib_oauth.google.authorize_access_token(request)
+        except Exception as e:
+            logger.error(f"OAuth token exchange failed: {e}")
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/?error=Google+login+failed")
+
+        userinfo = token.get("userinfo", {})
+        if not userinfo:
+            userinfo = await _authlib_oauth.google.userinfo(token=token)
+
+        email = userinfo.get("email", "")
+        name = userinfo.get("name", "")
+
+        if not email:
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/?error=Google+did+not+provide+email")
+
+        from utils.auth import get_user_by_email, create_user, session_login
+
+        user = await get_user_by_email(email)
+        if not user:
+            user = await create_user(email=email, display_name=name)
+
+        if user:
+            session_login(session, user)
+        else:
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/?error=Could+not+create+account")
+
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/")
+
+if not _oauth_enabled:
+    @rt("/login")
+    def login_get():
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/signin")
 
 
 @rt("/health")

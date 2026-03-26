@@ -82,6 +82,8 @@ def cli_login(console: Console) -> Tuple[Optional[str], Optional[str], Optional[
 
         if email.lower() == "signup":
             _open_signup(console)
+            if _open_signup._result:
+                return _open_signup._result
             continue
 
         if not email or "@" not in email:
@@ -175,7 +177,9 @@ async def async_cli_login(console: Console) -> Tuple[Optional[str], Optional[str
             return None, None, None
 
         if email.lower() == "signup":
-            _open_signup(console)
+            await _open_signup_async(console)
+            if _open_signup_async._result:
+                return _open_signup_async._result
             continue
 
         if not email or "@" not in email:
@@ -227,8 +231,62 @@ async def async_cli_login(console: Console) -> Tuple[Optional[str], Optional[str
     return None, None, None
 
 
+async def _open_signup_async(console: Console):
+    """Open the web app signup page in the default browser and wait for account creation."""
+    import webbrowser
+    url = f"{_get_signup_url()}/register"
+    try:
+        webbrowser.open(url)
+        console.print(
+            f"\n  [green]Opened [bold]{url}[/bold] in your browser.[/green]\n"
+            f"  Create your account, then come back here.\n"
+        )
+    except Exception:
+        console.print(
+            f"\n  [yellow]Could not open browser.[/yellow]\n"
+            f"  Go to [bold cyan]{url}[/bold cyan] to create your account.\n"
+        )
+        return
+
+    # Wait for user to finish signup, then auto-login by email
+    console.print("  [dim]Press Enter after you've created your account.[/dim]\n")
+    try:
+        await asyncio.to_thread(input, "  Press Enter when done...")
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    console.print()
+    try:
+        email = await asyncio.to_thread(input, "  Enter the email you signed up with: ")
+        email = email.strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+
+    if not email or "@" not in email:
+        console.print("[red]  Invalid email.[/red]\n")
+        return
+
+    # Try to find user by email (no password needed — they just created via web)
+    from utils.auth import get_user_by_email
+    user = await get_user_by_email(email)
+    if user:
+        console.print(
+            f"\n  [green]Welcome [bold]{user.get('display_name', email)}[/bold]! "
+            f"You're now logged in.[/green]\n"
+        )
+        _open_signup_async._result = (str(user["user_id"]), user["email"], user.get("display_name") or email)
+    else:
+        console.print(
+            f"[red]  No account found for {email}.[/red]\n"
+            f"  [dim]Make sure you completed signup in the browser, then try again.[/dim]\n"
+        )
+        _open_signup_async._result = None
+
+_open_signup_async._result = None
+
+
 def _open_signup(console: Console):
-    """Open the web app signup page in the default browser."""
+    """Sync version — just opens browser."""
     import webbrowser
     url = f"{_get_signup_url()}/register"
     try:

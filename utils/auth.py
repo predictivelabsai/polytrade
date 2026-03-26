@@ -205,6 +205,33 @@ def session_login(session, user: Dict):
     }
 
 
+def create_cross_app_token(user_id: str, email: str) -> str:
+    """Create a short-lived JWT (60s) for cross-app SSO (agui→web_app)."""
+    import jwt
+    secret = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "polytrade-fallback-secret"))
+    payload = {
+        "user_id": str(user_id),
+        "email": email,
+        "purpose": "cross_app_sso",
+        "exp": datetime.now(timezone.utc) + timedelta(seconds=60),
+        "iat": datetime.now(timezone.utc),
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def verify_cross_app_token(token: str) -> Optional[Dict]:
+    """Verify a cross-app SSO token. Returns {user_id, email} or None."""
+    import jwt
+    secret = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "polytrade-fallback-secret"))
+    try:
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        if payload.get("purpose") != "cross_app_sso":
+            return None
+        return {"user_id": payload["user_id"], "email": payload["email"]}
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

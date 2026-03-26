@@ -952,9 +952,18 @@ def _left_pane(session):
     # Help expanders
     parts.append(_help_expanders())
 
-    # Navigation links
+    # Navigation links — Dashboard with SSO token if logged in
+    if user:
+        from utils.auth import create_cross_app_token
+        sso_token = create_cross_app_token(user["user_id"], user["email"])
+        # Use localhost for dev, prod domain for deployed
+        import os
+        web_host = os.getenv("WEB_APP_URL", "http://localhost:4002")
+        dashboard_url = f"{web_host}/sso?token={sso_token}"
+    else:
+        dashboard_url = "http://localhost:4002"
     nav_links = [
-        A("Dashboard", href=f"https://app.polytrade.chat", target="_blank", cls="nav-link"),
+        A("Dashboard", href=dashboard_url, target="_blank", cls="nav-link"),
     ]
     if user:
         nav_links.append(A("Profile", href="/profile", cls="nav-link"))

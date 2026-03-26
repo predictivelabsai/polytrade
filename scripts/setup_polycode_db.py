@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.trades (
     edge_pct        DECIMAL(8,  4),
     confidence      DECIMAL(8,  4),
     trade_type      VARCHAR(20)     NOT NULL DEFAULT 'paper',   -- paper | backtest | real
+    domain          VARCHAR(20)     NOT NULL DEFAULT 'weather', -- weather | earnings | sports
+    user_id         UUID,
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
@@ -144,6 +146,38 @@ CREATE INDEX IF NOT EXISTS idx_chat_conv_user     ON {SCHEMA}.chat_conversations
 CREATE INDEX IF NOT EXISTS idx_chat_conv_updated  ON {SCHEMA}.chat_conversations(updated_at);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_thread    ON {SCHEMA}.chat_messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_chat_msg_created   ON {SCHEMA}.chat_messages(created_at);
+
+-- ── users ─────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS {SCHEMA}.users (
+    id              SERIAL          PRIMARY KEY,
+    user_id         UUID            UNIQUE NOT NULL DEFAULT gen_random_uuid(),
+    email           VARCHAR(255)    UNIQUE NOT NULL,
+    password_hash   VARCHAR(255),
+    display_name    VARCHAR(255),
+    is_active       BOOLEAN         NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_user_id ON {SCHEMA}.users(user_id);
+CREATE INDEX IF NOT EXISTS idx_users_email   ON {SCHEMA}.users(email);
+
+-- ── password_reset_tokens ─────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS {SCHEMA}.password_reset_tokens (
+    id          SERIAL          PRIMARY KEY,
+    user_id     UUID            NOT NULL REFERENCES {SCHEMA}.users(user_id) ON DELETE CASCADE,
+    token       VARCHAR(128)    UNIQUE NOT NULL,
+    expires_at  TIMESTAMPTZ     NOT NULL,
+    used_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ     DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pw_reset_token ON {SCHEMA}.password_reset_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_pw_reset_user  ON {SCHEMA}.password_reset_tokens(user_id);
+
+-- ── Link chat_conversations.user_id to users (optional FK) ────────────────
+-- ALTER TABLE {SCHEMA}.chat_conversations
+--   ADD CONSTRAINT fk_chat_conv_user FOREIGN KEY (user_id) REFERENCES {SCHEMA}.users(user_id);
 """
 
 

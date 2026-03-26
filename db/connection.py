@@ -25,8 +25,18 @@ async def _init_conn(conn: asyncpg.Connection) -> None:
 
 
 async def get_pool() -> asyncpg.Pool:
-    """Return (or lazily create) the shared connection pool."""
+    """Return (or lazily create) the shared connection pool. Auto-recreates on stale pool."""
     global _pool
+    if _pool is not None:
+        # Quick health check — if pool is closed, recreate
+        try:
+            await _pool.fetchval("SELECT 1")
+        except Exception:
+            try:
+                await _pool.close()
+            except Exception:
+                pass
+            _pool = None
     if _pool is None:
         _pool = await asyncpg.create_pool(
             _get_dsn(),

@@ -26,6 +26,33 @@ from fasthtml.common import *
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Google OAuth setup (optional — gracefully skip if no creds)
+# ---------------------------------------------------------------------------
+
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+_oauth_enabled = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+_authlib_oauth = None
+if _oauth_enabled:
+    from authlib.integrations.starlette_client import OAuth as AuthlibOAuth
+    _authlib_oauth = AuthlibOAuth()
+    _authlib_oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
+
+_GOOGLE_SVG = """<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+<path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/>
+<path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/>
+<path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9s.38 1.572.957 3.042l3.007-2.332z" fill="#FBBC05"/>
+<path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+</svg>"""
+
 from utils.agui import setup_agui, get_chat_styles, StreamingCommand
 
 # ---------------------------------------------------------------------------
@@ -201,7 +228,7 @@ langgraph_agent = create_react_agent(model=llm, tools=TOOLS, prompt=SYSTEM_PROMP
 
 app, rt = fast_app(
     exts="ws",
-    secret_key=os.urandom(32).hex(),
+    secret_key=os.getenv("JWT_SECRET", "polytrade-dev-secret-change-me"),
     hdrs=[
         Script(src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"),
     ],
@@ -254,7 +281,13 @@ async def _command_interceptor(msg: str, session):
             model_provider=os.getenv("MODEL_PROVIDER"),
         )
         agent = Agent.create(config)
-        cp = CommandProcessor(agent)
+        # Extract user_id from session
+        user_id = None
+        if session:
+            user = session.get("user") if isinstance(session, dict) else getattr(session, "get", lambda k: None)("user")
+            if user:
+                user_id = user.get("user_id") if isinstance(user, dict) else None
+        cp = CommandProcessor(agent, user_id=user_id)
 
         # Capture Rich output
         buf = io.StringIO()
@@ -269,7 +302,7 @@ async def _command_interceptor(msg: str, session):
                 return None  # Let AI handle it
 
             if output:
-                return f"```\n{output}\n```"
+                return f"```\n{output}\n```"  # Stripped by core.py and rendered as <pre>
             return "Command executed."
         finally:
             cp.console = original_console
@@ -290,20 +323,32 @@ _AGUI_HELP = """# PolyTrade Commands
 - `gip AAPL` — Intraday price graph
 - `news TSLA` — Latest news
 - `quote AAPL` — Real-time quote
-- `scan` — Scan weather opportunities
 
-## Polymarket Weather
-- `poly:weather London` — Search weather markets
-- `poly:backtest Seoul 7` — Multi-day backtest
+## Weather Markets
+- `poly:weather London` — Search markets + token IDs
+- `poly:weather Seoul` — Seoul weather markets
+- `poly:weather New York` — NYC weather markets
+- `scan` — Scan all weather opportunities
+
+## Backtest & Predict
+- `poly:backtest London 7` — 7-day London backtest
 - `poly:backtestv2 Seoul 7` — Cross-sectional YES/NO backtest
 - `poly:predict London 2` — Forward-looking prediction
 
 ## Trading
-- `poly:simbuy 50 <id>` — Simulate trade
-- `poly:buy 50 <id>` — Real USDC buy order
-- `poly:sell 50 <id>` — Real sell order
-- `poly:portfolio` — On-chain portfolio
-- `poly:paperportfolio` — Paper portfolio
+- `poly:simbuy 50 <token_id>` — Simulate trade (get token ID from poly:weather)
+- `poly:buy 50 <token_id>` — Real USDC buy order
+- `poly:sell 50 <token_id>` — Real USDC sell order
+- `poly:portfolio` — On-chain USDC portfolio
+- `poly:paperportfolio` — Paper trading portfolio
+
+## Reports & PnL
+- `poly:report weather` — Weather trades report (backtest)
+- `poly:report weather paper` — Weather paper trades
+- `poly:trades weather` — Weather trades table
+- `poly:trades weather paper` — Weather paper trades
+- `poly:pnl weather` — Weather PnL summary
+- `poly:pnl weather paper` — Weather paper PnL
 
 ## AI Chat
 Type any question to chat with AI about stocks & weather markets.
@@ -638,6 +683,79 @@ body {
 .left-pane::-webkit-scrollbar, .right-content::-webkit-scrollbar { width: 5px; }
 .left-pane::-webkit-scrollbar-thumb, .right-content::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
 
+/* === Sidebar Auth === */
+.auth-section {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #1e2a3a;
+}
+
+.sidebar-auth { display: flex; flex-direction: column; gap: 0.5rem; }
+
+.auth-input {
+  width: 100%; padding: 0.45rem 0.6rem;
+  background: #0f1117; border: 1px solid #2a3040; border-radius: 0.375rem;
+  color: #e2e8f0; font-family: inherit; font-size: 0.8rem;
+  box-sizing: border-box;
+}
+.auth-input::placeholder { color: #475569; }
+.auth-input:focus { outline: none; border-color: #10b981; }
+
+.auth-btn {
+  width: 100%; padding: 0.45rem;
+  background: #059669; color: #d1fae5; border: none; border-radius: 0.375rem;
+  cursor: pointer; font-family: inherit; font-weight: 600; font-size: 0.8rem;
+}
+.auth-btn:hover { background: #047857; }
+
+.auth-alt { font-size: 0.75rem; color: #64748b; text-align: center; }
+.auth-link { color: #10b981; text-decoration: none; font-size: 0.75rem; }
+.auth-link:hover { text-decoration: underline; }
+.auth-error { color: #f87171; font-size: 0.75rem; padding: 0.25rem 0; }
+
+.user-info {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.25rem 0;
+}
+.user-avatar {
+  width: 28px; height: 28px; background: #064e3b; color: #10b981;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 0.75rem; font-weight: 700;
+}
+.user-info-text { flex: 1; min-width: 0; }
+.user-name { font-size: 0.8rem; color: #e2e8f0; font-weight: 500; }
+.user-email { font-size: 0.7rem; color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logout-btn {
+  display: block; text-align: center; margin-top: 0.5rem;
+  padding: 0.3rem; background: transparent; border: 1px solid #2a3040;
+  border-radius: 0.375rem; color: #64748b; font-size: 0.75rem;
+  text-decoration: none; font-family: inherit;
+}
+.logout-btn:hover { border-color: #f87171; color: #f87171; }
+
+.google-btn {
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+  width: 100%; padding: 0.5rem; background: #1a1f2e; border: 1px solid #2a3040;
+  border-radius: 0.375rem; color: #e2e8f0; text-decoration: none;
+  font-size: 0.8rem; font-family: inherit; cursor: pointer; transition: all 0.2s;
+}
+.google-btn:hover { background: #2a3040; border-color: #4285F4; }
+.google-btn svg { flex-shrink: 0; }
+
+.auth-divider {
+  text-align: center; color: #475569; font-size: 0.7rem;
+  margin: 0.25rem 0; position: relative;
+}
+
+/* === Sidebar Nav === */
+.sidebar-nav {
+  display: flex; flex-direction: column; gap: 0.15rem;
+  padding: 0.5rem 0; border-top: 1px solid #1e2a3a;
+}
+.nav-link {
+  display: block; padding: 0.4rem 0.5rem; border-radius: 0.375rem;
+  color: #94a3b8; font-size: 0.8rem; text-decoration: none; transition: all 0.15s;
+}
+.nav-link:hover { background: #141821; color: #e2e8f0; }
+
 /* === Conversation List === */
 .conv-section {
   display: flex;
@@ -703,25 +821,34 @@ _HELP_CATEGORIES = [
         ("rv GOOG", "Relative valuation"),
         ("own AAPL", "Institutional ownership"),
         ("gp AAPL", "Price graph"),
+        ("gip AAPL", "Intraday price graph"),
         ("news TSLA", "Latest news"),
     ]),
     ("Weather Markets", [
-        ("poly:weather London", "Search weather markets"),
+        ("poly:weather London", "Search London markets + token IDs"),
         ("poly:weather Seoul", "Seoul weather markets"),
         ("poly:weather New York", "New York weather markets"),
         ("scan", "Scan all weather opportunities"),
     ]),
     ("Backtest & Predict", [
-        ("poly:backtest London 7", "7-day backtest"),
-        ("poly:backtestv2 Seoul 7", "Cross-sectional backtest"),
-        ("poly:predict London 2", "Forward prediction"),
+        ("poly:backtest London 7", "7-day London backtest"),
+        ("poly:backtestv2 Seoul 7", "Cross-sectional YES/NO backtest"),
+        ("poly:predict London 2", "Forward-looking prediction"),
     ]),
     ("Trading", [
-        ("poly:simbuy 50", "Simulate buy $50"),
-        ("poly:buy 50", "Real USDC buy"),
-        ("poly:sell 50", "Real USDC sell"),
-        ("poly:portfolio", "On-chain portfolio"),
-        ("poly:paperportfolio", "Paper portfolio"),
+        ("poly:simbuy 50 <token_id>", "Simulate buy $50 (needs token ID)"),
+        ("poly:buy 50 <token_id>", "Real USDC buy order"),
+        ("poly:sell 50 <token_id>", "Real USDC sell order"),
+        ("poly:portfolio", "On-chain USDC portfolio"),
+        ("poly:paperportfolio", "Paper trading portfolio"),
+    ]),
+    ("Reports & PnL", [
+        ("poly:report weather", "Weather trades report (backtest)"),
+        ("poly:report weather paper", "Weather paper trades"),
+        ("poly:trades weather", "Weather trades table"),
+        ("poly:trades weather paper", "Weather paper trades"),
+        ("poly:pnl weather", "Weather PnL summary"),
+        ("poly:pnl weather paper", "Weather paper PnL"),
     ]),
 ]
 
@@ -759,6 +886,32 @@ def _help_expanders():
 # Left pane builder
 # ---------------------------------------------------------------------------
 
+def _auth_section(session):
+    """Build auth section: login/signup forms or user info."""
+    user = session.get("user")
+    if user:
+        # Logged in — show user info + logout
+        name = user.get("display_name") or user.get("email", "User")
+        return Div(
+            Div(
+                Span(name[:1].upper(), cls="user-avatar"),
+                Div(
+                    Div(name, cls="user-name"),
+                    Div(user.get("email", ""), cls="user-email"),
+                    cls="user-info-text",
+                ),
+                cls="user-info",
+            ),
+            A("Logout", href="/logout", cls="logout-btn"),
+            cls="auth-section",
+        )
+    # Not logged in — show login form with toggle to signup
+    return Div(
+        Div(id="auth-forms", hx_get="/agui-auth/login-form", hx_trigger="load", hx_swap="innerHTML"),
+        cls="auth-section",
+    )
+
+
 def _left_pane(session):
     """Build the left sidebar."""
     parts = []
@@ -772,12 +925,17 @@ def _left_pane(session):
         )
     )
 
+    # Auth section (login/signup or user info)
+    parts.append(_auth_section(session))
+
+    user = session.get("user")
+
     # New Chat button
     parts.append(
         Button("+ New Chat", cls="new-chat-btn", onclick="window.location.href='/?new=1'")
     )
 
-    # Recent conversations
+    # Recent conversations (filtered by user)
     parts.append(
         Div(
             H4("Recent", style="font-size:0.8rem;font-weight:600;color:#64748b;margin-bottom:0.5rem;"),
@@ -793,6 +951,15 @@ def _left_pane(session):
 
     # Help expanders
     parts.append(_help_expanders())
+
+    # Navigation links
+    nav_links = [
+        A("Dashboard", href=f"https://app.polytrade.chat", target="_blank", cls="nav-link"),
+    ]
+    if user:
+        nav_links.append(A("Profile", href="/profile", cls="nav-link"))
+    nav = Div(*nav_links, cls="sidebar-nav")
+    parts.append(nav)
 
     # Footer
     parts.append(Div("Powered by PolyTrade", cls="sidebar-footer"))
@@ -937,10 +1104,26 @@ def get(session, new: str = "", thread: str = ""):
 
 @rt("/agui-conv/list")
 async def conv_list(session):
-    """Return the conversation list for the sidebar (DB-backed)."""
+    """Return the conversation list for the sidebar (DB-backed, filtered by user)."""
     from utils.agui.chat_store import list_conversations
     current_tid = session.get("thread_id", "")
-    convs = await list_conversations(user_id=None, limit=20)
+    user = session.get("user")
+    if not user:
+        return Div(Div("Login to see your chats", cls="conv-empty"))
+    user_id = user.get("user_id")
+    # Claim current thread if it has no user_id
+    if current_tid and user_id:
+        try:
+            from db.connection import get_pool
+            from uuid import UUID
+            pool = await get_pool()
+            await pool.execute("""
+                UPDATE polycode.chat_conversations
+                SET user_id = $1 WHERE thread_id = $2 AND user_id IS NULL
+            """, UUID(user_id), UUID(current_tid))
+        except Exception:
+            pass
+    convs = await list_conversations(user_id=user_id, limit=20)
     items = []
     for c in convs:
         tid = c["thread_id"]
@@ -952,6 +1135,511 @@ async def conv_list(session):
     if not items:
         items.append(Div("No conversations yet", cls="conv-empty"))
     return Div(*items)
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+@rt("/agui-auth/login-form")
+def login_form_fragment():
+    """Return the login form for the sidebar."""
+    parts = []
+    if _oauth_enabled:
+        parts.append(A(NotStr(_GOOGLE_SVG), " Sign in with Google", href="/login", cls="google-btn"))
+        parts.append(Div("or", cls="auth-divider"))
+    parts.extend([
+        Form(
+            Input(type="email", name="email", placeholder="Email", required=True, cls="auth-input"),
+            Input(type="password", name="password", placeholder="Password", required=True, cls="auth-input"),
+            Button("Login", type="submit", cls="auth-btn"),
+            hx_post="/agui-auth/login",
+            hx_target="#auth-forms",
+            hx_swap="innerHTML",
+            cls="sidebar-auth",
+        ),
+        Div(
+            A("Forgot password?", href="/forgot", cls="auth-link"),
+            cls="auth-alt",
+        ),
+        Div(
+            "No account? ",
+            A("Sign up", href="#", hx_get="/agui-auth/register-form",
+              hx_target="#auth-forms", hx_swap="innerHTML", cls="auth-link"),
+            cls="auth-alt",
+        ),
+    ])
+    return Div(*parts, cls="sidebar-auth")
+
+
+@rt("/agui-auth/register-form")
+def register_form_fragment():
+    """Return the signup form for the sidebar."""
+    parts = []
+    if _oauth_enabled:
+        parts.append(A(NotStr(_GOOGLE_SVG), " Sign up with Google", href="/login", cls="google-btn"))
+        parts.append(Div("or", cls="auth-divider"))
+    parts.extend([
+        Form(
+            Input(type="text", name="display_name", placeholder="Name", cls="auth-input"),
+            Input(type="email", name="email", placeholder="Email", required=True, cls="auth-input"),
+            Input(type="password", name="password", placeholder="Password (min 6 chars)", required=True, cls="auth-input"),
+            Button("Sign Up", type="submit", cls="auth-btn"),
+            hx_post="/agui-auth/register",
+            hx_target="#auth-forms",
+            hx_swap="innerHTML",
+            cls="sidebar-auth",
+        ),
+        Div(
+            "Have an account? ",
+            A("Login", href="#", hx_get="/agui-auth/login-form",
+              hx_target="#auth-forms", hx_swap="innerHTML", cls="auth-link"),
+            cls="auth-alt",
+        ),
+    ])
+    return Div(*parts, cls="sidebar-auth")
+
+
+@rt("/agui-auth/login", methods=["POST"])
+async def agui_login(session, email: str = "", password: str = ""):
+    """Process sidebar login."""
+    from utils.auth import authenticate, session_login
+    if not email or not password:
+        return Div(Div("Email and password required.", cls="auth-error"), login_form_fragment())
+    user = await authenticate(email, password)
+    if not user:
+        return Div(Div("Invalid email or password.", cls="auth-error"), login_form_fragment())
+    session_login(session, user)
+    # Use HX-Redirect header for HTMX to do a full page reload
+    from starlette.responses import Response
+    resp = Response(status_code=200, headers={"HX-Redirect": "/"})
+    return resp
+
+
+@rt("/agui-auth/register", methods=["POST"])
+async def agui_register(session, email: str = "", password: str = "", display_name: str = ""):
+    """Process sidebar signup."""
+    from utils.auth import create_user, session_login
+    if not email or not password:
+        return Div(Div("Email and password required.", cls="auth-error"), register_form_fragment())
+    if len(password) < 6:
+        return Div(Div("Password must be at least 6 characters.", cls="auth-error"), register_form_fragment())
+    user = await create_user(email, password, display_name or None)
+    if not user:
+        return Div(Div("Email already registered.", cls="auth-error"), register_form_fragment())
+    session_login(session, user)
+    from starlette.responses import Response
+    return Response(status_code=200, headers={"HX-Redirect": "/"})
+
+
+@rt("/register")
+async def register_page(request, session, msg: str = ""):
+    """Full-page register form (for CLI signup redirect)."""
+    if request.method == "POST":
+        form = await request.form()
+        email = form.get("email", "")
+        password = form.get("password", "")
+        display_name = form.get("display_name", "")
+        if not email or not password:
+            msg = "Email and password required."
+        elif len(password) < 6:
+            msg = "Password must be at least 6 characters."
+        else:
+            from utils.auth import create_user, session_login
+            user = await create_user(email, password, display_name or None)
+            if user:
+                session_login(session, user)
+                from starlette.responses import RedirectResponse
+                return RedirectResponse("/", status_code=303)
+            msg = "Email already registered."
+    parts = [H2("Create Account")]
+    if msg:
+        parts.append(P(msg, cls="auth-error"))
+    if _oauth_enabled:
+        parts.append(A(NotStr(_GOOGLE_SVG), " Sign up with Google", href="/login",
+                       cls="google-btn", style="margin-bottom:0.75rem;"))
+        parts.append(Div("or", style="text-align:center;color:#475569;font-size:0.8rem;margin-bottom:0.75rem;"))
+    parts.append(Form(
+        Input(type="text", name="display_name", placeholder="Name (optional)", cls="auth-input"),
+        Input(type="email", name="email", placeholder="Email", required=True, cls="auth-input"),
+        Input(type="password", name="password", placeholder="Password (min 6 chars)", required=True, cls="auth-input"),
+        Button("Sign Up", type="submit", cls="auth-btn"),
+        method="post", action="/register",
+    ))
+    parts.append(Div("Have an account? ", A("Login", href="/signin"), cls="auth-alt", style="margin-top:1rem;"))
+    return (
+        Title("Sign Up — PolyTrade"),
+        Style(LAYOUT_CSS),
+        Style(_AUTH_PAGE_CSS),
+        Div(Div(*parts, cls="auth-card"), cls="auth-page"),
+    )
+
+
+@rt("/signin")
+async def signin_page(request, session, msg: str = ""):
+    """Full-page sign-in form."""
+    if request.method == "POST":
+        form = await request.form()
+        email = form.get("email", "")
+        password = form.get("password", "")
+        from utils.auth import authenticate, session_login
+        user = await authenticate(email, password)
+        if user:
+            session_login(session, user)
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/", status_code=303)
+        msg = "Invalid email or password."
+    parts = [H2("PolyTrade Login")]
+    if msg:
+        parts.append(P(msg, cls="auth-error"))
+    if _oauth_enabled:
+        parts.append(A(NotStr(_GOOGLE_SVG), " Sign in with Google", href="/login",
+                       cls="google-btn", style="margin-bottom:0.75rem;"))
+        parts.append(Div("or", style="text-align:center;color:#475569;font-size:0.8rem;margin-bottom:0.75rem;"))
+    parts.append(Form(
+        Input(type="email", name="email", placeholder="Email", required=True, cls="auth-input"),
+        Input(type="password", name="password", placeholder="Password", required=True, cls="auth-input"),
+        Button("Login", type="submit", cls="auth-btn"),
+        method="post", action="/signin",
+    ))
+    parts.append(Div(A("Forgot password?", href="/forgot"), cls="auth-alt", style="margin-top:0.75rem;"))
+    parts.append(Div("No account? ", A("Sign up", href="/register"), cls="auth-alt"))
+    return (
+        Title("Sign In — PolyTrade"),
+        Style(LAYOUT_CSS),
+        Style(_AUTH_PAGE_CSS),
+        Div(Div(*parts, cls="auth-card"), cls="auth-page"),
+    )
+
+
+@rt("/logout")
+def logout(session):
+    """Sign out — clear session."""
+    session.pop("user", None)
+    from starlette.responses import RedirectResponse
+    return RedirectResponse("/", status_code=303)
+
+
+@rt("/forgot")
+async def forgot_password(request, session, email: str = "", msg: str = ""):
+    """Forgot password page — show form or process email."""
+    if request.method == "POST" and email:
+        from utils.auth import create_password_reset_token
+        from utils.email_util import send_email_to
+        token = await create_password_reset_token(email)
+        if token:
+            scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+            host = request.headers.get("host", request.url.netloc)
+            reset_url = f"{scheme}://{host}/reset?token={token}"
+            body_html = f"""
+            <div style="font-family: -apple-system, sans-serif; max-width: 500px; margin: 0 auto;">
+              <h2>Reset Your Password</h2>
+              <p>You requested a password reset for your PolyTrade account.</p>
+              <p><a href="{reset_url}"
+                    style="display:inline-block; padding:12px 24px; background:#059669;
+                           color:#fff; text-decoration:none; border-radius:6px;">
+                Reset Password
+              </a></p>
+              <p style="color:#6c757d; font-size:13px;">
+                This link expires in 1 hour. If you didn't request this, ignore this email.
+              </p>
+            </div>
+            """
+            send_email_to(email, "PolyTrade — Password Reset", body_html)
+        msg = "If that email is registered, you will receive a reset link."
+    return (
+        Title("Forgot Password — PolyTrade"),
+        Style(LAYOUT_CSS),
+        Style(_AUTH_PAGE_CSS),
+        Div(
+            Div(
+                H2("Forgot Password"),
+                P(msg, cls="auth-success") if msg else None,
+                Form(
+                    Input(type="email", name="email", placeholder="Your email address",
+                          required=True, cls="auth-input", value=email),
+                    Button("Send Reset Link", type="submit", cls="auth-btn"),
+                    method="post", action="/forgot",
+                ),
+                A("Back to chat", href="/", cls="auth-link",
+                  style="display:block;text-align:center;margin-top:1rem;"),
+                cls="auth-card",
+            ),
+            cls="auth-page",
+        ),
+    )
+
+
+@rt("/reset")
+async def reset_password(request, session, token: str = "", msg: str = ""):
+    """Reset password page — verify token and update password."""
+    if request.method == "POST":
+        password = (request.query_params.get("password") or "")
+        # Read form data
+        form = await request.form()
+        password = form.get("password", "")
+        token = form.get("token", token)
+        if len(password) < 6:
+            msg = "Password must be at least 6 characters."
+        else:
+            from utils.auth import verify_and_consume_reset_token, update_password
+            user = await verify_and_consume_reset_token(token)
+            if user:
+                await update_password(user["user_id"], password)
+                from starlette.responses import RedirectResponse
+                return RedirectResponse("/?msg=Password+reset+successfully.+Please+login.", status_code=303)
+            else:
+                msg = "Invalid or expired reset link."
+    if not token:
+        msg = "Missing reset token."
+    return (
+        Title("Reset Password — PolyTrade"),
+        Style(LAYOUT_CSS),
+        Style(_AUTH_PAGE_CSS),
+        Div(
+            Div(
+                H2("Reset Password"),
+                P(msg, cls="auth-error") if msg else None,
+                Form(
+                    Hidden(name="token", value=token),
+                    Input(type="password", name="password", placeholder="New password (min 6 chars)",
+                          required=True, cls="auth-input"),
+                    Button("Reset Password", type="submit", cls="auth-btn"),
+                    method="post", action=f"/reset?token={token}",
+                ),
+                A("Back to chat", href="/", cls="auth-link",
+                  style="display:block;text-align:center;margin-top:1rem;"),
+                cls="auth-card",
+            ),
+            cls="auth-page",
+        ),
+    )
+
+
+_AUTH_PAGE_CSS = """
+.auth-page {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: #0a0d14;
+  font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+}
+.auth-card {
+  background: #0f1117; border: 1px solid #1e2a3a; border-radius: 12px;
+  padding: 2rem; width: 100%; max-width: 400px;
+}
+.auth-card h2 { color: #10b981; margin-bottom: 1.5rem; text-align: center; }
+.auth-card .auth-input {
+  width: 100%; padding: 0.6rem 0.8rem; margin-bottom: 0.75rem;
+  background: #141821; border: 1px solid #2a3040; border-radius: 0.375rem;
+  color: #e2e8f0; font-family: inherit; font-size: 0.85rem;
+}
+.auth-card .auth-input:focus { outline: none; border-color: #10b981; }
+.auth-card .auth-btn {
+  width: 100%; padding: 0.6rem; background: #059669; color: #d1fae5;
+  border: none; border-radius: 0.375rem; cursor: pointer; font-family: inherit;
+  font-weight: 600; font-size: 0.85rem; margin-top: 0.5rem;
+}
+.auth-card .auth-btn:hover { background: #047857; }
+.auth-error { color: #f87171; font-size: 0.8rem; margin-bottom: 0.75rem; }
+.auth-success { color: #10b981; font-size: 0.8rem; margin-bottom: 0.75rem; }
+.auth-link { color: #10b981; font-size: 0.8rem; }
+"""
+
+
+# ---------------------------------------------------------------------------
+# Profile page
+# ---------------------------------------------------------------------------
+
+@rt("/profile")
+async def profile_page(session, msg: str = ""):
+    user = session.get("user")
+    if not user:
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/")
+
+    parts = [H2("Profile")]
+    if msg:
+        is_err = "fail" in msg.lower() or "error" in msg.lower() or "cannot" in msg.lower()
+        parts.append(P(msg, cls="auth-error" if is_err else "auth-success"))
+
+    # Account info
+    parts.extend([
+        H3("Account Info"),
+        Form(
+            Label("Email"),
+            Input(type="email", value=user.get("email", ""), disabled=True, cls="auth-input",
+                  style="opacity:0.6;cursor:not-allowed;"),
+            Label("Display Name"),
+            Input(type="text", name="display_name", value=user.get("display_name", ""),
+                  placeholder="Your name", required=True, cls="auth-input"),
+            Button("Update Name", type="submit", cls="auth-btn"),
+            method="post", action="/profile/name", cls="profile-form",
+        ),
+    ])
+
+    # Change password — check if user has a password set
+    from utils.auth import get_user_by_id
+    db_user = await get_user_by_id(user["user_id"])
+    has_pw = db_user and db_user.get("password_hash")
+
+    if has_pw:
+        parts.extend([
+            H3("Change Password"),
+            Form(
+                Input(type="password", name="current_password", placeholder="Current password",
+                      required=True, cls="auth-input"),
+                Input(type="password", name="new_password", placeholder="New password (min 6 chars)",
+                      required=True, cls="auth-input"),
+                Input(type="password", name="confirm_password", placeholder="Confirm new password",
+                      required=True, cls="auth-input"),
+                Button("Change Password", type="submit", cls="auth-btn"),
+                method="post", action="/profile/password", cls="profile-form",
+            ),
+        ])
+    else:
+        parts.extend([
+            H3("Set Password"),
+            P("You signed in with Google. Set a password to also log in with email + CLI.",
+              style="color:#64748b;font-size:0.8rem;margin-bottom:0.5rem;"),
+            Form(
+                Input(type="password", name="new_password", placeholder="New password (min 6 chars)",
+                      required=True, cls="auth-input"),
+                Input(type="password", name="confirm_password", placeholder="Confirm new password",
+                      required=True, cls="auth-input"),
+                Button("Set Password", type="submit", cls="auth-btn"),
+                method="post", action="/profile/password", cls="profile-form",
+            ),
+        ])
+
+    parts.append(Div(A("Back to chat", href="/", cls="auth-link"), cls="auth-alt",
+                      style="margin-top:1.5rem;"))
+
+    return (
+        Title("Profile — PolyTrade"),
+        Style(LAYOUT_CSS),
+        Style(_AUTH_PAGE_CSS),
+        Style("""
+            .profile-page { max-width:500px; margin:2rem auto; padding:2rem; }
+            .profile-page h2 { color:#10b981; margin-bottom:1rem; }
+            .profile-page h3 { color:#94a3b8; font-size:0.9rem; margin:1.5rem 0 0.75rem; }
+            .profile-page label { color:#64748b; font-size:0.8rem; display:block; margin-bottom:0.25rem; }
+            .profile-form { display:flex; flex-direction:column; gap:0.5rem; }
+            body { background:#0a0d14; color:#e2e8f0; font-family:'SF Mono',ui-monospace,monospace; }
+        """),
+        Div(*parts, cls="profile-page"),
+    )
+
+
+@rt("/profile/name", methods=["POST"])
+async def profile_update_name(session, display_name: str = ""):
+    user = session.get("user")
+    if not user:
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/")
+    if not display_name.strip():
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/profile?msg=Display+name+cannot+be+empty", status_code=303)
+    from utils.auth import update_display_name
+    ok = await update_display_name(user["user_id"], display_name)
+    if ok:
+        session["user"]["display_name"] = display_name.strip()
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(f"/profile?msg={'Name+updated' if ok else 'Failed+to+update'}", status_code=303)
+
+
+@rt("/profile/password", methods=["POST"])
+async def profile_change_password(session, current_password: str = "", new_password: str = "", confirm_password: str = ""):
+    from starlette.responses import RedirectResponse
+    from utils.auth import authenticate, update_password, get_user_by_id
+    user = session.get("user")
+    if not user:
+        return RedirectResponse("/")
+    if not new_password:
+        return RedirectResponse("/profile?msg=New+password+required", status_code=303)
+    if new_password != confirm_password:
+        return RedirectResponse("/profile?msg=Passwords+do+not+match", status_code=303)
+    if len(new_password) < 6:
+        return RedirectResponse("/profile?msg=Password+must+be+6%2B+characters", status_code=303)
+    # Check if user has existing password (Google-only users don't)
+    db_user = await get_user_by_id(user["user_id"])
+    has_pw = db_user and db_user.get("password_hash")
+    if has_pw:
+        # Must verify current password
+        if not current_password:
+            return RedirectResponse("/profile?msg=Current+password+required", status_code=303)
+        auth = await authenticate(user["email"], current_password)
+        if not auth:
+            return RedirectResponse("/profile?msg=Current+password+incorrect", status_code=303)
+    # Set/update password
+    await update_password(user["user_id"], new_password)
+    return RedirectResponse("/profile?msg=Password+updated+successfully", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth routes
+# ---------------------------------------------------------------------------
+
+if _oauth_enabled:
+    @rt("/login")
+    async def login_get(request):
+        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+        host = request.headers.get("host", request.url.netloc)
+        redirect_uri = f"{scheme}://{host}/auth/callback"
+        return await _authlib_oauth.google.authorize_redirect(request, redirect_uri)
+
+    @rt("/auth/callback")
+    async def auth_callback(request, session):
+        try:
+            token = await _authlib_oauth.google.authorize_access_token(request)
+        except Exception as e:
+            logger.error(f"OAuth token exchange failed: {e}")
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/?error=Google+login+failed")
+
+        userinfo = token.get("userinfo", {})
+        if not userinfo:
+            userinfo = await _authlib_oauth.google.userinfo(token=token)
+
+        email = userinfo.get("email", "")
+        name = userinfo.get("name", "")
+
+        if not email:
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/?error=Google+did+not+provide+email")
+
+        from utils.auth import get_user_by_email, create_user, session_login
+
+        user = await get_user_by_email(email)
+        if not user:
+            user = await create_user(email=email, display_name=name)
+
+        if user:
+            session_login(session, user)
+        else:
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/?error=Could+not+create+account")
+
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/")
+
+if not _oauth_enabled:
+    @rt("/login")
+    def login_get():
+        from starlette.responses import RedirectResponse
+        return RedirectResponse("/")
+
+
+@rt("/download-csv")
+def download_csv(path: str = ""):
+    """Serve a CSV file from test-results/ directory."""
+    import os
+    from starlette.responses import FileResponse
+    if not path or ".." in path or not path.startswith("test-results/"):
+        return {"error": "invalid path"}
+    full_path = os.path.join(os.path.dirname(__file__), path)
+    if not os.path.isfile(full_path):
+        return {"error": "file not found"}
+    filename = os.path.basename(full_path)
+    return FileResponse(full_path, media_type="text/csv", filename=filename)
 
 
 @rt("/health")

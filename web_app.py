@@ -255,7 +255,7 @@ def _help_html():
         ]),
     )
 
-    # Column 3: Trading + General
+    # Column 3: Trading + Reports + General
     col3 = Div(
         *_section("Paper Trading", [
             ("poly:paperbuy 50 <id>", "Paper buy"),
@@ -266,6 +266,14 @@ def _help_html():
             ("poly:buy 50 <id>", "Real USDC buy order"),
             ("poly:sell 50 <id>", "Real sell order"),
             ("poly:portfolio", "On-chain portfolio"),
+        ]),
+        *_section("Reports & PnL", [
+            ("poly:report weather", "Weather trades report (backtest)"),
+            ("poly:report weather paper", "Weather paper trades"),
+            ("poly:trades weather", "Weather trades table"),
+            ("poly:trades weather paper", "Weather paper trades"),
+            ("poly:pnl weather", "Weather PnL summary"),
+            ("poly:pnl weather paper", "Weather paper PnL"),
         ]),
         *_section("General", [
             ("help / h / ?", "This help screen"),
@@ -342,6 +350,17 @@ _GUIDE_MD = """
 | `poly:sell 50 <id>` | Place a real sell order |
 | `poly:portfolio` | View on-chain portfolio |
 | `poly:paperportfolio` | View paper trading portfolio |
+
+## Reports & PnL
+
+| Command | Description |
+|---------|-------------|
+| `poly:report weather` | Weather trades report (backtest) |
+| `poly:report weather paper` | Weather paper trades |
+| `poly:trades weather` | Weather trades table |
+| `poly:trades weather paper` | Weather paper trades |
+| `poly:pnl weather` | Weather PnL summary |
+| `poly:pnl weather paper` | Weather paper PnL |
 
 ## AI Chat
 Type any free-form question to chat with the AI research agent.
@@ -635,6 +654,100 @@ def chat_stream_get(session):
 # ---------------------------------------------------------------------------
 # Periodic session cleanup
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Auth routes (web shell)
+# ---------------------------------------------------------------------------
+
+_WEB_AUTH_CSS = """
+.auth-page { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#0a0d14; font-family:'SF Mono',ui-monospace,monospace; }
+.auth-card { background:#0f1117; border:1px solid #1e2a3a; border-radius:12px; padding:2rem; width:100%; max-width:400px; }
+.auth-card h2 { color:#10b981; margin-bottom:1.5rem; text-align:center; }
+.auth-card input { width:100%; padding:0.6rem 0.8rem; margin-bottom:0.75rem; background:#141821; border:1px solid #2a3040; border-radius:0.375rem; color:#e2e8f0; font-family:inherit; font-size:0.85rem; box-sizing:border-box; }
+.auth-card input:focus { outline:none; border-color:#10b981; }
+.auth-card button { width:100%; padding:0.6rem; background:#059669; color:#d1fae5; border:none; border-radius:0.375rem; cursor:pointer; font-family:inherit; font-weight:600; font-size:0.85rem; margin-top:0.5rem; }
+.auth-card button:hover { background:#047857; }
+.auth-error { color:#f87171; font-size:0.8rem; margin-bottom:0.75rem; }
+.auth-success { color:#10b981; font-size:0.8rem; margin-bottom:0.75rem; }
+.auth-alt { text-align:center; margin-top:1rem; font-size:0.8rem; color:#64748b; }
+.auth-alt a { color:#10b981; text-decoration:none; }
+.auth-alt a:hover { text-decoration:underline; }
+"""
+
+@rt("/signin")
+async def signin(request, session, email: str = "", msg: str = ""):
+    if request.method == "POST":
+        form = await request.form()
+        email = form.get("email", "")
+        password = form.get("password", "")
+        from utils.auth import authenticate, session_login
+        user = await authenticate(email, password)
+        if user:
+            session_login(session, user)
+            from starlette.responses import RedirectResponse
+            return RedirectResponse("/", status_code=303)
+        msg = "Invalid email or password."
+    return (
+        Title("Sign In — PolyTrade"),
+        Style(_WEB_AUTH_CSS),
+        Div(Div(
+            H2("PolyTrade Login"),
+            P(msg, cls="auth-error") if msg else None,
+            Form(
+                Input(type="email", name="email", placeholder="Email", required=True, value=email),
+                Input(type="password", name="password", placeholder="Password", required=True),
+                Button("Login", type="submit"),
+                method="post", action="/signin",
+            ),
+            Div(A("Forgot password?", href="/forgot"), cls="auth-alt"),
+            Div("No account? ", A("Sign up", href="/register"), cls="auth-alt"),
+            cls="auth-card",
+        ), cls="auth-page"),
+    )
+
+@rt("/register")
+async def register(request, session, msg: str = ""):
+    if request.method == "POST":
+        form = await request.form()
+        email = form.get("email", "")
+        password = form.get("password", "")
+        display_name = form.get("display_name", "")
+        if not email or not password:
+            msg = "Email and password required."
+        elif len(password) < 6:
+            msg = "Password must be at least 6 characters."
+        else:
+            from utils.auth import create_user, session_login
+            user = await create_user(email, password, display_name or None)
+            if user:
+                session_login(session, user)
+                from starlette.responses import RedirectResponse
+                return RedirectResponse("/", status_code=303)
+            msg = "Email already registered."
+    return (
+        Title("Sign Up — PolyTrade"),
+        Style(_WEB_AUTH_CSS),
+        Div(Div(
+            H2("Create Account"),
+            P(msg, cls="auth-error") if msg else None,
+            Form(
+                Input(type="text", name="display_name", placeholder="Name (optional)"),
+                Input(type="email", name="email", placeholder="Email", required=True),
+                Input(type="password", name="password", placeholder="Password (min 6 chars)", required=True),
+                Button("Sign Up", type="submit"),
+                method="post", action="/register",
+            ),
+            Div("Have an account? ", A("Login", href="/signin"), cls="auth-alt"),
+            cls="auth-card",
+        ), cls="auth-page"),
+    )
+
+@rt("/web-logout")
+def web_logout(session):
+    session.pop("user", None)
+    from starlette.responses import RedirectResponse
+    return RedirectResponse("/signin", status_code=303)
+
 
 @rt("/health")
 def health():

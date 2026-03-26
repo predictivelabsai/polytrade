@@ -95,16 +95,8 @@ async def list_conversations(user_id: Optional[str] = None, limit: int = 20) -> 
             LIMIT $2
         """, uid, limit)
     else:
-        rows = await pool.fetch("""
-            SELECT c.thread_id, c.title, c.updated_at,
-                   (SELECT content FROM polycode.chat_messages m
-                    WHERE m.thread_id = c.thread_id AND m.role = 'user'
-                    ORDER BY m.created_at ASC LIMIT 1) AS first_msg
-            FROM polycode.chat_conversations c
-            WHERE c.user_id IS NULL
-            ORDER BY c.updated_at DESC
-            LIMIT $1
-        """, limit)
+        # No user_id — return empty (don't show anonymous chats)
+        return []
     return [
         {
             "thread_id": str(r["thread_id"]),

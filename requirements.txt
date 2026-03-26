@@ -32,5 +32,11 @@ fastapi
 asyncpg
 psycopg2-binary
 
+# ── Auth ──────────────────────────────────────────────────────────────────
+bcrypt
+PyJWT
+authlib
+
 # ── Dev / test ────────────────────────────────────────────────────────────
 pytest
+pytest-asyncio

@@ -539,6 +539,7 @@ class BacktestEngine:
                         "prob": f"{int(dis_prob * 100)}%",
                         "market_prob": f"{int(dis_mkt_prob * 100)}%",
                         "price": round(trade_price, 3) if trade_side else round(price, 3),
+                        "edge": trade_edge if trade_side else edge,
                         "countdown": entry_data.get("countdown", "N/A"),
                         "result": res_str,
                         "forecast_secondary": round(secondary_weather.get("tempmax", 0), 1) if secondary_weather else "N/A"

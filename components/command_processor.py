@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 from rich.console import Console
 from rich.table import Table
@@ -10,11 +11,12 @@ from rich.syntax import Syntax
 class CommandProcessor:
     """Processes OpenBB-style commands directly for speed (bash-style) or yields to agent."""
 
-    def __init__(self, agent_instance):
+    def __init__(self, agent_instance, user_id: Optional[str] = None):
         self.agent = agent_instance
         self.console = Console()
         self.current_ticker: Optional[str] = None
         self.history: List[str] = []
+        self.user_id = user_id
         from utils.portfolio_manager import PortfolioManager
         from agent.tools.polymarket_tool import get_polymarket_client
         self.portfolio = PortfolioManager()
@@ -257,6 +259,76 @@ class CommandProcessor:
                  
                  return True, None
 
+            elif effective_cmd == "poly:pnl":
+                # poly:pnl [weather|earnings|sports|all] [backtest|paper|real]
+                domain_filter = "all"
+                type_filter = None
+                for arg in effective_args:
+                    a = arg.lower()
+                    if a in ("weather", "earnings", "sports"):
+                        domain_filter = a
+                    elif a in ("backtest", "paper", "real"):
+                        type_filter = a
+                from db.repository import get_pnl_summary
+                domain_arg = domain_filter if domain_filter != "all" else None
+                # Default to backtest if no type specified
+                effective_type = type_filter or "backtest"
+                summary = await get_pnl_summary(domain=domain_arg, trade_type=effective_type)
+                parts = [domain_filter.upper() if domain_filter != "all" else "ALL"]
+                parts.append(f"{effective_type.upper()} Results")
+                label = " — ".join(parts)
+                self.console.print(f"\n[bold cyan]PnL Summary — {label}[/bold cyan]")
+
+                if summary:
+                    pnl_table = Table(header_style="bold magenta")
+                    pnl_table.add_column("Metric")
+                    pnl_table.add_column("Value", justify="right")
+
+                    total = int(summary.get("total_trades", 0))
+                    open_t = int(summary.get("open_trades", 0))
+                    closed = int(summary.get("closed_trades", 0))
+                    invested = float(summary.get("total_invested", 0))
+                    payout = float(summary.get("total_payout", 0))
+                    realized = float(summary.get("realized_pnl", 0))
+                    wins = int(summary.get("win_count", 0))
+                    losses = int(summary.get("loss_count", 0))
+                    win_rate = float(summary.get("win_rate", 0))
+                    roi = float(summary.get("roi_pct", 0))
+
+                    pnl_table.add_row("Total Trades", str(total))
+                    pnl_table.add_row("Open", f"[yellow]{open_t}[/yellow]")
+                    pnl_table.add_row("Closed", str(closed))
+                    pnl_table.add_row("Total Invested", f"${invested:.2f}")
+                    pnl_table.add_row("Total Payout", f"${payout:.2f}")
+                    pnl_color = "green" if realized >= 0 else "red"
+                    pnl_table.add_row("Realized PnL", f"[{pnl_color}]${realized:.2f}[/{pnl_color}]")
+                    pnl_table.add_row("Wins / Losses", f"[green]{wins}[/green] / [red]{losses}[/red]")
+                    pnl_table.add_row("Win Rate", f"{win_rate:.1f}%")
+                    roi_color = "green" if roi >= 0 else "red"
+                    pnl_table.add_row("ROI", f"[{roi_color}]{roi:.1f}%[/{roi_color}]")
+                    self.console.print(pnl_table)
+
+                    if open_t > 0 and closed == 0:
+                        self.console.print(f"\n[dim]All {open_t} trades are still open. PnL will update when trades are closed.[/dim]")
+                else:
+                    self.console.print("[yellow]No trades found for this filter.[/yellow]")
+                return True, None
+
+            elif effective_cmd in ("poly:report", "poly:trades"):
+                # poly:report [weather|earnings|sports|all] [backtest|paper|real]
+                domain_filter = "all"
+                type_filter = None
+                for arg in effective_args:
+                    a = arg.lower()
+                    if a in ("weather", "earnings", "sports"):
+                        domain_filter = a
+                    elif a in ("backtest", "paper", "real"):
+                        type_filter = a
+                # Default to backtest if no type specified
+                effective_type = type_filter or "backtest"
+                await self._display_trades_report(domain=domain_filter, trade_type=effective_type)
+                return True, None
+
             elif any(x in effective_cmd or (effective_args and x in effective_args[0]) for x in ["weather", "weathter", "wether"]):
                  # Check if it was actually poly:realportfolio (redundant safety but ok)
                  if effective_cmd == "poly:portfolio":
@@ -425,6 +497,38 @@ class CommandProcessor:
                     return True, None
                 
                 trade = self.portfolio.add_trade(market_id, market.question, amount, price)
+
+                # Also save to DB with city and side
+                try:
+                    from db.repository import upsert_trade
+                    # Extract city from question
+                    q = market.question.lower()
+                    city = "Unknown"
+                    for c in ["london", "new york", "nyc", "seoul", "tokyo", "paris", "singapore", "hong kong", "dubai", "miami", "atlanta", "sao paulo", "buenos aires"]:
+                        if c in q:
+                            city = c.title()
+                            break
+                    await upsert_trade({
+                        "trade_id": trade["id"],
+                        "market_id": market_id,
+                        "market_question": market.question,
+                        "trade_side": "YES",
+                        "amount": amount,
+                        "entry_price": price,
+                        "shares": trade["shares"],
+                        "status": "OPEN",
+                        "payout": 0,
+                        "pnl": 0,
+                        "period": datetime.now().strftime("%Y-%m-%d"),
+                        "city": city,
+                        "signal": "YES",
+                        "trade_type": "paper",
+                        "domain": "weather",
+                        "user_id": self.user_id,
+                    })
+                except Exception as e:
+                    pass  # DB save is best-effort
+
                 self.console.print(Panel(
                     f"Market: {market.question}\nEntry Price: [bold]${price:.3f}[/bold]\nAmount: [green]${amount:.2f}[/green]\nShares: [cyan]{trade['shares']:.2f}[/cyan]",
                     title="[bold green]Paper Trade Executed[/bold green]",
@@ -486,7 +590,7 @@ class CommandProcessor:
             elif effective_cmd == "poly:paperportfolio":
                 await self._display_portfolio()
                 return True, None
-            
+
             else:
                 self.console.print(f"[red]Unknown Polymarket command: {effective_cmd}[/red]")
                 self.console.print("Available: poly:weather, poly:backtest, poly:buy")
@@ -985,7 +1089,131 @@ class CommandProcessor:
                 stats.add_row("Capital in Active Markets", f"[yellow]${result['pending_invested']:.2f}[/yellow]")
             
             self.console.print(stats)
-            self.console.print(f"\nDetailed report saved to: {result['csv_path']}")
+
+            # --- Analysis Summary ---
+            trades = result.get("trades", [])
+            if trades:
+                wins = sum(1 for t in trades if "WIN" in t.get("result", ""))
+                losses = sum(1 for t in trades if "LOSS" in t.get("result", ""))
+                pending = len(trades) - wins - losses
+                roi = result.get("resolved_roi", 0)
+                net_pnl = result.get("resolved_payout", 0) - result.get("resolved_invested", 0)
+                avg_price = sum(t.get("price", 0) for t in trades) / len(trades) if trades else 0
+
+                self.console.print("\n[bold]Analysis:[/bold]")
+                mode = "Prediction" if is_prediction else "Backtest"
+                self.console.print(
+                    f"  {mode} ran {len(trades)} trade(s) for {result['city']} "
+                    f"over {lookback_days} day(s): "
+                    f"[green]{wins}W[/green] / [red]{losses}L[/red]"
+                    + (f" / [yellow]{pending} pending[/yellow]" if pending else "")
+                    + "."
+                )
+                if roi >= 0:
+                    self.console.print(
+                        f"  Strategy returned [green]+{roi:.1f}% ROI[/green] "
+                        f"([green]+${net_pnl:.2f}[/green] net profit)."
+                    )
+                else:
+                    self.console.print(
+                        f"  Strategy returned [red]{roi:.1f}% ROI[/red] "
+                        f"([red]-${abs(net_pnl):.2f}[/red] net loss)."
+                    )
+                self.console.print(f"  Average entry price: ${avg_price:.3f}.")
+
+                # Edge insight
+                edges = [t.get("edge", 0) for t in trades if t.get("edge")]
+                if edges:
+                    avg_edge = sum(edges) / len(edges)
+                    self.console.print(
+                        f"  Average edge at entry: {avg_edge*100:.1f}% "
+                        f"({'favorable' if avg_edge > 0 else 'unfavorable'})."
+                    )
+
+                # Markets analyzed
+                markets_found = result.get("markets_found", 0)
+                if markets_found:
+                    self.console.print(
+                        f"  Markets analyzed: {markets_found} total, "
+                        f"{len(trades)} selected by strategy."
+                    )
+
+                # --- Why did trades win/lose? ---
+                self.console.print("\n[bold]Why these results?[/bold]")
+                for t in trades:
+                    date_str = t.get("date", "?")
+                    try:
+                        from datetime import datetime
+                        date_display = datetime.strptime(date_str, "%Y-%m-%d").strftime("%b %d")
+                    except Exception:
+                        date_display = date_str
+                    res = t.get("result", "")
+                    bucket = t.get("bucket", "?")
+                    actual = t.get("actual", "N/A")
+                    forecast_f = t.get("forecast", "?")
+                    price = t.get("price", 0)
+                    our_prob = t.get("prob", "?")
+                    mkt_prob = t.get("market_prob", "?")
+                    edge = t.get("edge", 0)
+
+                    if "WIN" in res:
+                        self.console.print(
+                            f"  [green]{date_display}[/green]: Bought YES on '{bucket}' at ${price:.3f} "
+                            f"(market said {mkt_prob}, we calculated {our_prob}). "
+                            f"Actual temp was {actual} — our forecast ({forecast_f}°F) was correct, "
+                            f"so market resolved YES. Edge was {edge*100:.1f}%."
+                        )
+                    elif "LOSS" in res:
+                        self.console.print(
+                            f"  [red]{date_display}[/red]: Bought YES on '{bucket}' at ${price:.3f} "
+                            f"(market said {mkt_prob}, we calculated {our_prob}). "
+                            f"Actual temp was {actual} — our forecast ({forecast_f}°F) was wrong, "
+                            f"market resolved NO. Edge was {edge*100:.1f}%."
+                        )
+                    elif "PENDING" in res:
+                        self.console.print(
+                            f"  [yellow]{date_display}[/yellow]: Open position on '{bucket}' at ${price:.3f}. "
+                            f"Forecast: {forecast_f}°F, our probability: {our_prob}. Awaiting resolution."
+                        )
+
+                # Overall takeaway
+                if wins > 0 and losses == 0:
+                    self.console.print(
+                        f"\n  [bold green]Takeaway:[/bold green] The weather forecast aligned with actual temperatures "
+                        f"every day, giving us accurate probability estimates. Market prices were lower than "
+                        f"our fair values, creating profitable entry points on all {wins} trades."
+                    )
+                elif wins > losses:
+                    self.console.print(
+                        f"\n  [bold green]Takeaway:[/bold green] Strategy won {wins}/{wins+losses} trades. "
+                        f"Wins came from accurate forecasts where market underpriced the likely outcome. "
+                        f"Losses occurred when actual temperature deviated from the forecast."
+                    )
+                elif losses > wins:
+                    self.console.print(
+                        f"\n  [bold red]Takeaway:[/bold red] Strategy lost {losses}/{wins+losses} trades. "
+                        f"Forecast errors caused the strategy to pick wrong temperature buckets. "
+                        f"Consider using shorter lookback or checking forecast accuracy for this city."
+                    )
+
+            # Save backtest trades to DB
+            try:
+                from db.repository import save_backtest_trades
+                saved_count = await save_backtest_trades(
+                    run_id=None,
+                    backtest_result=result,
+                    city=city,
+                    user_id=self.user_id,
+                )
+                if saved_count > 0:
+                    self.console.print(f"\n[dim]{saved_count} backtest trades saved to database.[/dim]")
+            except Exception as e:
+                logger.warning(f"Could not save backtest trades to DB: {e}")
+
+            # Only show file path in CLI (not web/agui where console output goes to StringIO)
+            import io
+            if not isinstance(self.console.file, io.StringIO):
+                self.console.print(f"\nDetailed report saved to: {result['csv_path']}")
 
             await pm_client.close()
             await vc_client.close()
@@ -1070,6 +1298,79 @@ class CommandProcessor:
         
         self.console.print(Panel(summary, title="[bold]Portfolio Summary[/bold]", border_style="cyan"))
 
+    async def _display_trades_report(self, domain: str = "all", trade_type: str = None):
+        """Display a summary report of trades from the DB, filtered by domain and/or trade_type."""
+        from db.repository import get_trades, get_pnl_summary
+
+        domain_arg = domain if domain != "all" else None
+        trades = await get_trades(limit=50, domain=domain_arg, trade_type=trade_type)
+        summary = await get_pnl_summary(domain=domain_arg, trade_type=trade_type)
+
+        parts = []
+        if domain != "all":
+            parts.append(domain.upper())
+        if trade_type:
+            parts.append(trade_type.upper())
+        domain_label = " / ".join(parts) if parts else "ALL"
+
+        if not trades:
+            self.console.print(f"[yellow]No {domain_label} trades found in database.[/yellow]")
+            self.console.print("Run backtests or paper trades to generate data.")
+            return
+
+        # Trades table
+        table = Table(title=f"Trade Report — {domain_label} ({len(trades)} trades)", header_style="bold magenta", expand=True)
+        table.add_column("Date", style="cyan", width=10)
+        table.add_column("Domain", width=8)
+        table.add_column("City", width=10)
+        table.add_column("Side", width=6)
+        table.add_column("Amount", justify="right", width=8)
+        table.add_column("Entry", justify="right", width=8)
+        table.add_column("PnL", justify="right", width=10)
+        table.add_column("Status", width=8)
+        table.add_column("Type", style="dim", width=8)
+
+        for t in trades:
+            pnl = float(t.get("pnl", 0) or 0)
+            pnl_color = "green" if pnl >= 0 else "red"
+            date_str = str(t.get("period") or t.get("created_at", ""))[:10]
+            trade_domain = t.get("domain", "weather")
+            domain_colors = {"weather": "cyan", "earnings": "yellow", "sports": "magenta"}
+            dc = domain_colors.get(trade_domain, "dim")
+            table.add_row(
+                date_str,
+                f"[{dc}]{trade_domain}[/{dc}]",
+                t.get("city", ""),
+                t.get("signal", t.get("trade_side", "")),
+                f"${float(t.get('amount', 0)):.2f}",
+                f"${float(t.get('entry_price', 0)):.3f}",
+                f"[{pnl_color}]${pnl:+.2f}[/{pnl_color}]",
+                t.get("status", ""),
+                t.get("trade_type", ""),
+            )
+
+        self.console.print(table)
+
+        # Summary panel
+        s = summary
+        total_inv = float(s.get("total_invested", 0))
+        total_pnl = float(s.get("realized_pnl", 0))
+        win_rate = float(s.get("win_rate", 0))
+        roi = float(s.get("roi_pct", 0))
+        pnl_color = "green" if total_pnl >= 0 else "red"
+
+        summary_table = Table(show_header=False, box=None)
+        summary_table.add_column(justify="left")
+        summary_table.add_column(justify="right")
+        summary_table.add_row("Total Invested:", f"${total_inv:.2f}")
+        summary_table.add_row("Realized PnL:", f"[{pnl_color}]${total_pnl:+.2f}[/{pnl_color}]")
+        summary_table.add_row("Win Rate:", f"{win_rate:.1f}%")
+        summary_table.add_row("ROI:", f"[{pnl_color}]{roi:+.1f}%[/{pnl_color}]")
+        summary_table.add_row("Open Trades:", str(s.get("open_trades", 0)))
+        summary_table.add_row("Closed Trades:", str(s.get("closed_trades", 0)))
+
+        self.console.print(Panel(summary_table, title=f"[bold]PnL Summary — {domain_label}[/bold]", border_style="cyan"))
+
     def _show_help(self):
         table = Table(title="PolyTrade Global Commands (BASH-STYLE)", show_header=True, header_style="bold cyan")
         table.add_column("Command", style="bold yellow")
@@ -1090,6 +1391,12 @@ class CommandProcessor:
         table.add_row("poly:buy <amt> <id>", "REAL Order Execution (Max $1000.00)", "~2s")
         table.add_row("poly:sell <amt> <id>", "REAL Order Selling (Shares)", "~2s")
         table.add_row("poly:portfolio", "View Real On-Chain USDC + Positions", "Instant")
+        table.add_row("poly:report weather", "Weather trades report (backtest)", "Instant")
+        table.add_row("poly:report weather paper", "Weather paper trades", "Instant")
+        table.add_row("poly:trades weather", "Weather trades table", "Instant")
+        table.add_row("poly:trades weather paper", "Weather paper trades", "Instant")
+        table.add_row("poly:pnl weather", "Weather PnL summary", "Instant")
+        table.add_row("poly:pnl weather paper", "Weather paper PnL", "Instant")
         table.add_row("poly:simbuy <amt> <id>", "Simulate price/slippage without trading", "Instant")
         table.add_row("reset, r, ..", "Reset context/ticker", "-")
         table.add_row("help, h, ?", "Displays this menu", "-")

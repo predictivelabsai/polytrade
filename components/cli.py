@@ -25,6 +25,9 @@ class PolyCodeCLI:
         self.chat_history: List[Dict[str, str]] = []
         self.console = Console()
         self.cmd_processor: Optional[CommandProcessor] = None
+        self.user_id: Optional[str] = None
+        self.user_email: Optional[str] = None
+        self.display_name: Optional[str] = None
 
     async def initialize(self):
         """Initialize the agent."""
@@ -133,6 +136,15 @@ class PolyCodeCLI:
                 except Exception:
                     pass
 
+    async def do_login(self):
+        """Run the interactive login prompt."""
+        from utils.cli_auth import async_cli_login
+        uid, email, display = await async_cli_login(self.console)
+        if uid:
+            self.user_id = uid
+            self.user_email = email
+            self.display_name = display
+
     async def run(self):
         """Run the CLI interactive loop."""
         await self.initialize()
@@ -140,25 +152,49 @@ class PolyCodeCLI:
         self.console.print("\n[bold cyan]PolyTrade CLI[/bold cyan] - Financial Research Agent")
         self.console.print(f"[yellow]Model:[/yellow] {self.model}")
         self.console.print(f"[yellow]Provider:[/yellow] {self.provider}")
+
+        # Login prompt on startup
+        await self.do_login()
+
+        if self.display_name:
+            self.console.print(f"[bold cyan]Welcome, {self.display_name}![/bold cyan]")
         self.console.print("Type 'help' for commands or ask a question.\n")
 
         while True:
             try:
-                # Update prompt based on current ticker
+                # Update prompt based on current ticker + user
                 ticker_display = f"({self.cmd_processor.current_ticker}) " if self.cmd_processor.current_ticker else ""
-                prompt = f"[bold green]{ticker_display}You:[/bold green] "
-                
+                user_label = self.display_name or "You"
+                prompt = f"[bold green]{ticker_display}{user_label}:[/bold green] "
+
                 user_input = self.console.input(prompt).strip()
 
                 if not user_input:
                     continue
 
+                # Handle login/logout commands
+                if user_input.lower() == "login":
+                    await self.do_login()
+                    continue
+                if user_input.lower() == "logout":
+                    self.user_id = None
+                    self.user_email = None
+                    self.display_name = None
+                    self.console.print("[yellow]Logged out.[/yellow]\n")
+                    continue
+                if user_input.lower() == "whoami":
+                    if self.user_id:
+                        self.console.print(f"  [cyan]{self.display_name}[/cyan] ({self.user_email})")
+                    else:
+                        self.console.print("  [dim]Not logged in. Type 'login' to sign in.[/dim]")
+                    continue
+
                 # Process command first
                 is_handled, agent_query = await self.cmd_processor.process_command(user_input)
-                
+
                 if is_handled:
                     continue
-                
+
                 if agent_query:
                     self.console.print("\n[yellow]Researching...[/yellow]")
                     await self.process_query(agent_query)

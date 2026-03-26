@@ -131,8 +131,32 @@ class UI:
         role = message.get("role", "assistant")
         cls = "chat-user" if role == "user" else "chat-assistant"
         mid = message.get("message_id", str(uuid.uuid4()))
+        content = message.get("content", "")
+
+        # Detect Rich table content — render as <pre> instead of markdown
+        has_box = any(c in content for c in "\u2502\u2503\u2500\u2501\u250c\u2510\u2514\u2518\u2513\u251b")
+        stripped = content.strip()
+        is_code = stripped.startswith("```")
+
+        if role != "user" and (has_box or is_code):
+            # Extract raw text from code block wrapper
+            if is_code:
+                raw = stripped[3:]
+                if raw.startswith("\n"):
+                    raw = raw[1:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip("\n")
+            else:
+                raw = content
+            return Div(
+                Div(Pre(raw, cls="agui-log-pre"), cls="chat-message-content"),
+                cls=f"chat-message {cls}",
+                id=mid,
+            )
+
         return Div(
-            Div(message.get("content", ""), cls="chat-message-content marked"),
+            Div(content, cls="chat-message-content marked"),
             cls=f"chat-message {cls}",
             id=mid,
         )
@@ -268,6 +292,65 @@ class UI:
                     });
                     return rows.join('\\n');
                 }
+                // Convert Rich console table to clean CSV
+                // Handles thin (│ U+2502), thick (┃ U+2503) Rich borders
+                // Extracts ONLY table data rows — no text, no analysis
+                var PIPE_RE = /[\u2502\u2503]/;
+                var BORDER_RE = /^[\u2500-\u257f\u2550-\u256c\u2580-\u259f─━┏┓┗┛┡┩╇╈╭╮╰╯+\-=\s]+$/;
+                function richTextToCSV(text) {
+                    var NL = String.fromCharCode(10);
+                    var lines = text.split(NL);
+                    var allCsvRows = [];
+                    // Count table vs panel lines
+                    var tableCount = 0, panelCount = 0;
+                    for (var k = 0; k < lines.length; k++) {
+                        if (!PIPE_RE.test(lines[k])) continue;
+                        var p = lines[k].split(/[\u2502\u2503]/);
+                        var n = 0;
+                        for (var m = 0; m < p.length; m++) { if (p[m].trim() && !BORDER_RE.test(p[m].trim())) n++; }
+                        if (n >= 2) tableCount++;
+                        else if (n === 1) panelCount++;
+                    }
+                    if (panelCount > tableCount && tableCount < 2) {
+                        // Panel mode (load AAPL etc.)
+                        allCsvRows.push('Field,Value');
+                        for (var i = 0; i < lines.length; i++) {
+                            if (!PIPE_RE.test(lines[i])) continue;
+                            var c = lines[i].replace(/[\u2502\u2503]/g, '').trim();
+                            if (!c || BORDER_RE.test(c)) continue;
+                            var ci = c.indexOf(':');
+                            if (ci < 0 || ci > 30) continue;
+                            if (/^(Source|Business)/i.test(c.substring(0, ci).trim())) continue;
+                            var key = c.substring(0, ci).trim().replace(/,/g, '');
+                            var val = '"' + c.substring(ci + 1).trim().replace(/"/g, "'") + '"';
+                            allCsvRows.push(key + ',' + val);
+                        }
+                    } else {
+                        // Table mode — extract ONLY lines with │ or ┃ data cells
+                        var prevColCount = 0;
+                        for (var i = 0; i < lines.length; i++) {
+                            if (!PIPE_RE.test(lines[i])) continue;
+                            var parts = lines[i].split(/[\u2502\u2503]/);
+                            var cells = [];
+                            for (var j = 0; j < parts.length; j++) {
+                                var raw = parts[j].trim();
+                                if (!raw) continue;
+                                if (BORDER_RE.test(raw)) continue;
+                                cells.push('"' + raw.replace(/"/g, "'") + '"');
+                            }
+                            if (cells.length >= 2) {
+                                // Insert blank row between tables with different column counts
+                                if (prevColCount > 0 && cells.length !== prevColCount && allCsvRows.length > 0) {
+                                    allCsvRows.push('');
+                                }
+                                allCsvRows.push(cells.join(','));
+                                prevColCount = cells.length;
+                            }
+                        }
+                    }
+                    }
+                    return csvRows.join(NL);
+                }
                 function addToolbar(el, getText) {
                     if (el.dataset.enhanced === '1') return;
                     el.dataset.enhanced = '1';
@@ -280,7 +363,9 @@ class UI:
                     copyBtn.textContent = 'Copy';
                     copyBtn.className = 'table-action-btn';
                     copyBtn.onclick = function() {
-                        navigator.clipboard.writeText(getText()).then(function() {
+                        var data = getText();
+                        if (!data) { copyBtn.textContent = 'Opening file...'; return; }
+                        navigator.clipboard.writeText(data).then(function() {
                             copyBtn.textContent = 'Copied!';
                             setTimeout(function(){ copyBtn.textContent = 'Copy'; }, 1500);
                         });
@@ -290,7 +375,8 @@ class UI:
                     dlBtn.className = 'table-action-btn';
                     dlBtn.onclick = function() {
                         var data = getText();
-                        var blob = new Blob([data], {type: 'text/csv'});
+                        if (!data) return; // Redirected to file download
+                        var blob = new Blob([data], {type: 'text/csv;charset=utf-8'});
                         var url = URL.createObjectURL(blob);
                         var a = document.createElement('a');
                         a.href = url;
@@ -303,28 +389,35 @@ class UI:
                     el.parentNode.insertBefore(toolbar, el);
                 }
                 function enhanceTables(container) {
+                    try {
                     var root = container || document;
                     // HTML tables
                     root.querySelectorAll('table').forEach(function(table) {
                         addToolbar(table, function(){ return tableToCSV(table); });
                     });
-                    // Pre blocks (Rich console output with pipes or box-drawing chars)
+                    // Pre blocks with agui-log-pre class OR any pre with box chars
                     root.querySelectorAll('pre').forEach(function(pre) {
                         if (pre.dataset.enhanced === '1') return;
                         var txt = pre.textContent || '';
-                        var hasTable = (txt.indexOf('|') > -1 || txt.indexOf('\u2502') > -1 || txt.indexOf('\u250c') > -1);
-                        var lines = txt.split(String.fromCharCode(10));
-                        if (hasTable && lines.length >= 3) {
-                            addToolbar(pre, function(){ return pre.textContent; });
-                            // Mark inner code as enhanced too to prevent duplicates
-                            pre.querySelectorAll('code').forEach(function(c){ c.dataset.enhanced = '1'; });
+                        if (txt.length < 10) return;
+                        // Check for any box-drawing character
+                        if (PIPE_RE.test(txt) || /[\u250c\u2510\u2514\u2518\u2513\u251b\u2501\u2500\u256d\u256e\u256f\u2570]/.test(txt)) {
+                            addToolbar(pre, function(){ return richTextToCSV(pre.textContent); });
                         }
                     });
+                    } catch(e) { console.error('enhanceTables error:', e); }
                 }
-                // Run enhanceTables on full page every 2s to catch all new content
-                setInterval(function() {
-                    enhanceTables(document.getElementById('chat-messages'));
-                }, 2000);
+                // Run enhanceTables globally every 2s
+                setInterval(function() { enhanceTables(document); }, 2000);
+                // Also run after any HTMX swap
+                document.body.addEventListener('htmx:afterSwap', function() {
+                    setTimeout(function(){ enhanceTables(document); }, 300);
+                });
+                document.body.addEventListener('htmx:afterSettle', function() {
+                    setTimeout(function(){ enhanceTables(document); }, 500);
+                });
+                // Run on page load
+                setTimeout(function(){ enhanceTables(document); }, 1000);
                 // Auto-render .marked elements
                 if (window.marked) {
                     new MutationObserver(function() {
@@ -420,8 +513,14 @@ class AGUIThread:
         self._connections.pop(connection_id, None)
 
     async def send(self, element):
-        for _, send_fn in self._connections.items():
-            await send_fn(element)
+        dead = []
+        for cid, send_fn in self._connections.items():
+            try:
+                await send_fn(element)
+            except Exception:
+                dead.append(cid)
+        for cid in dead:
+            self._connections.pop(cid, None)
 
     async def _send_js(self, js_code: str):
         """Execute JS in the browser via OOB swap."""
@@ -747,13 +846,40 @@ class AGUIThread:
 
         # Remove streaming cursor, inject final content
         await self.send(Span("", id=f"streaming-{asst_id}", hx_swap_oob="outerHTML"))
-        await self.send(Div(
-            Div(result, cls="chat-message-content marked", id=content_id),
-            cls="chat-message chat-assistant",
-            id=f"message-{asst_id}",
-            hx_swap_oob="outerHTML",
-        ))
-        await self._send_js(f"renderMarkdown('{content_id}');")
+
+        # Check if result contains Rich table output — render as <pre>
+        stripped = result.strip()
+        is_code = stripped.startswith("```")
+        if is_code:
+            # Strip opening ``` and closing ```
+            raw_text = stripped[3:]
+            if raw_text.startswith("\n"):
+                raw_text = raw_text[1:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            raw_text = raw_text.strip("\n")
+        # Also detect raw Rich output (has box-drawing chars but no ```)
+        has_box = any(c in result for c in "\u2502\u2503\u2500\u2501\u250c\u2510\u2514\u2518\u2513\u251b\u2533\u253b")
+        if is_code or has_box:
+            display_text = raw_text if is_code else result
+            await self.send(Div(
+                Div(
+                    Pre(display_text, cls="agui-log-pre", id=content_id),
+                    cls="chat-message-content",
+                ),
+                cls="chat-message chat-assistant",
+                id=f"message-{asst_id}",
+                hx_swap_oob="outerHTML",
+            ))
+            await self._send_js(f"setTimeout(function(){{ enhanceTables(document.getElementById('message-{asst_id}')); }}, 200);")
+        else:
+            await self.send(Div(
+                Div(result, cls="chat-message-content marked", id=content_id),
+                cls="chat-message chat-assistant",
+                id=f"message-{asst_id}",
+                hx_swap_oob="outerHTML",
+            ))
+            await self._send_js(f"renderMarkdown('{content_id}');")
         await self._send_js(_SCROLL_CHAT_JS)
 
         # Trace: command complete
@@ -883,16 +1009,19 @@ class AGUIThread:
                     model_provider=os.getenv("MODEL_PROVIDER"),
                 )
                 agent = Agent.create(config)
-                cp = CommandProcessor(agent)
+                cp = CommandProcessor(agent, user_id=self._user_id)
                 # Capture Rich output to buffer
                 buf = io.StringIO()
                 cp.console = Console(file=buf, force_terminal=False, width=120, no_color=True)
                 _, _ = await cp.process_command(sc.raw_command)
                 output = buf.getvalue().strip()
                 if output:
-                    result_holder["value"] = f"```\n{output}\n```"
+                    # Store raw output (not markdown-wrapped) — rendered as <pre> directly
+                    result_holder["value"] = output
+                    result_holder["is_pre"] = True
                 else:
                     result_holder["value"] = "Command executed."
+                    result_holder["is_pre"] = False
             except Exception as e:
                 import traceback
                 result_holder["error"] = traceback.format_exc()
@@ -939,17 +1068,33 @@ class AGUIThread:
         # 9. Final result
         if result_holder["error"]:
             final_result = f"# Error\n\n```\n{result_holder['error']}\n```"
+            is_pre = False
         else:
             final_result = result_holder["value"] or "Command executed."
+            is_pre = result_holder.get("is_pre", False)
 
         try:
-            await self.send(Div(
-                Div(final_result, cls="chat-message-content marked", id=content_id),
-                cls="chat-message chat-assistant",
-                id=f"message-{asst_id}",
-                hx_swap_oob="outerHTML",
-            ))
-            await self._send_js(f"renderMarkdown('{content_id}');")
+            if is_pre:
+                # Render as <pre> directly — preserves Rich table formatting
+                await self.send(Div(
+                    Div(
+                        Pre(final_result, cls="agui-log-pre", id=content_id),
+                        cls="chat-message-content",
+                    ),
+                    cls="chat-message chat-assistant",
+                    id=f"message-{asst_id}",
+                    hx_swap_oob="outerHTML",
+                ))
+                # Trigger table enhancement on this new pre
+                await self._send_js(f"setTimeout(function(){{ enhanceTables(document.getElementById('message-{asst_id}')); }}, 200);")
+            else:
+                await self.send(Div(
+                    Div(final_result, cls="chat-message-content marked", id=content_id),
+                    cls="chat-message chat-assistant",
+                    id=f"message-{asst_id}",
+                    hx_swap_oob="outerHTML",
+                ))
+                await self._send_js(f"renderMarkdown('{content_id}');")
             await self._send_js(_SCROLL_CHAT_JS)
 
             # Trace: done
@@ -1024,7 +1169,13 @@ class AGUISetup:
 
     def thread(self, thread_id: str, session=None) -> AGUIThread:
         if thread_id not in self._threads:
-            t = AGUIThread(thread_id=thread_id, langgraph_agent=self._agent)
+            # Extract user_id from session
+            user_id = None
+            if session:
+                user = session.get("user")
+                if user:
+                    user_id = user.get("user_id")
+            t = AGUIThread(thread_id=thread_id, langgraph_agent=self._agent, user_id=user_id)
             if self._command_interceptor:
                 t._command_interceptor = self._command_interceptor
             self._threads[thread_id] = t
@@ -1032,7 +1183,12 @@ class AGUISetup:
 
     def _on_conn(self, ws, send, session):
         tid = session.get("thread_id", "default")
-        self.thread(tid, session).subscribe(str(id(ws)), send)
+        thread = self.thread(tid, session)
+        # Update user_id if user logged in after thread was created
+        user = session.get("user")
+        if user and not thread._user_id:
+            thread._user_id = user.get("user_id")
+        thread.subscribe(str(id(ws)), send)
 
     def _on_disconn(self, ws, session):
         tid = session.get("thread_id", "default")

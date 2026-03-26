@@ -16,7 +16,7 @@ async def create_run(query: str, model: str, provider: str) -> str:
     run_id = str(uuid.uuid4())
     await pool.execute(
         """
-        INSERT INTO runs (run_id, query, model, provider, status)
+        INSERT INTO polycode.runs(run_id, query, model, provider, status)
         VALUES ($1, $2, $3, $4, 'running')
         """,
         run_id, query, model, provider,
@@ -35,7 +35,7 @@ async def finish_run(
     status = "failed" if error else "completed"
     await pool.execute(
         """
-        UPDATE runs
+        UPDATE polycode.runs
         SET status=$1, iterations=$2, tool_calls=$3,
             finished_at=NOW(), error_message=$4
         WHERE run_id=$5
@@ -47,14 +47,14 @@ async def finish_run(
 async def get_runs(limit: int = 20) -> List[Dict]:
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM runs ORDER BY started_at DESC LIMIT $1", limit
+        "SELECT * FROM polycode.runs ORDER BY started_at DESC LIMIT $1", limit
     )
     return [_record_to_dict(r) for r in rows]
 
 
 async def get_run(run_id: str) -> Optional[Dict]:
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM runs WHERE run_id=$1", run_id)
+    row = await pool.fetchrow("SELECT * FROM polycode.runs WHERE run_id=$1", run_id)
     return _record_to_dict(row) if row else None
 
 
@@ -66,6 +66,16 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
     """Insert or update a trade record."""
     pool = await get_pool()
 
+    # Convert period string to date object
+    period_val = trade.get("period")
+    if period_val and isinstance(period_val, str):
+        from datetime import date as _date
+        try:
+            period_val = _date.fromisoformat(period_val[:10])
+        except Exception:
+            period_val = None
+    trade["_period"] = period_val
+
     def _f(key, default=None):
         v = trade.get(key, default)
         return float(v) if v is not None and key in (
@@ -73,15 +83,25 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
             "payout", "pnl", "edge_pct", "confidence",
         ) else v
 
+    # Convert user_id string to UUID if present
+    user_id_val = trade.get("user_id")
+    if user_id_val and isinstance(user_id_val, str):
+        from uuid import UUID as _UUID
+        try:
+            user_id_val = _UUID(user_id_val)
+        except Exception:
+            user_id_val = None
+
     await pool.execute(
         """
-        INSERT INTO trades (
+        INSERT INTO polycode.trades(
             trade_id, run_id, market_id, market_question, trade_side,
             amount, entry_price, shares, status, exit_price, payout, pnl,
             period, city, signal, edge_pct, confidence, trade_type,
+            domain, user_id,
             created_at, updated_at
         ) VALUES (
-            $1,$2,$3,$4,$5, $6,$7,$8,$9,$10,$11,$12, $13,$14,$15,$16,$17,$18, NOW(),NOW()
+            $1,$2,$3,$4,$5, $6,$7,$8,$9,$10,$11,$12, $13,$14,$15,$16,$17,$18, $19,$20, NOW(),NOW()
         )
         ON CONFLICT (trade_id) DO UPDATE SET
             status      = EXCLUDED.status,
@@ -89,6 +109,8 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
             payout      = EXCLUDED.payout,
             pnl         = EXCLUDED.pnl,
             trade_type  = EXCLUDED.trade_type,
+            domain      = EXCLUDED.domain,
+            user_id     = COALESCE(EXCLUDED.user_id, polycode.trades.user_id),
             updated_at  = NOW()
         """,
         trade.get("trade_id"),
@@ -103,12 +125,14 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
         _f("exit_price"),
         _f("payout", 0),
         _f("pnl", 0),
-        trade.get("period"),
+        trade.get("_period"),
         trade.get("city"),
         trade.get("signal"),
         _f("edge_pct"),
         _f("confidence"),
         trade.get("trade_type", "paper"),
+        trade.get("domain", "weather"),
+        user_id_val,
     )
     return trade
 
@@ -119,6 +143,8 @@ async def get_trades(
     offset: int = 0,
     run_id: Optional[str] = None,
     trade_type: Optional[str] = None,
+    domain: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict]:
     pool = await get_pool()
     conditions: List[str] = []
@@ -133,12 +159,19 @@ async def get_trades(
     if trade_type:
         params.append(trade_type)
         conditions.append(f"trade_type = ${len(params)}")
+    if domain and domain != "all":
+        params.append(domain)
+        conditions.append(f"domain = ${len(params)}")
+    if user_id:
+        from uuid import UUID
+        params.append(UUID(user_id) if not isinstance(user_id, UUID) else user_id)
+        conditions.append(f"user_id = ${len(params)}")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     params += [limit, offset]
     rows = await pool.fetch(
         f"""
-        SELECT * FROM trades {where}
+        SELECT * FROM polycode.trades {where}
         ORDER BY created_at DESC
         LIMIT ${len(params)-1} OFFSET ${len(params)}
         """,
@@ -149,7 +182,7 @@ async def get_trades(
 
 async def get_trade(trade_id: str) -> Optional[Dict]:
     pool = await get_pool()
-    row = await pool.fetchrow("SELECT * FROM trades WHERE trade_id=$1", trade_id)
+    row = await pool.fetchrow("SELECT * FROM polycode.trades WHERE trade_id=$1", trade_id)
     return _record_to_dict(row) if row else None
 
 
@@ -163,7 +196,7 @@ async def update_trade_status(
     pool = await get_pool()
     await pool.execute(
         """
-        UPDATE trades
+        UPDATE polycode.trades
         SET status=$1, exit_price=$2, payout=$3, pnl=$4, updated_at=NOW()
         WHERE trade_id=$5
         """,
@@ -175,6 +208,7 @@ async def save_backtest_trades(
     run_id: Optional[str],
     backtest_result: Dict[str, Any],
     city: str,
+    user_id: Optional[str] = None,
 ) -> int:
     """Batch-save trades from a BacktestEngine result into DB with trade_type='backtest'.
 
@@ -227,6 +261,8 @@ async def save_backtest_trades(
             "city": city,
             "signal": side,
             "trade_type": "backtest",
+            "domain": "weather",
+            "user_id": user_id,
         })
         saved += 1
     return saved
@@ -236,11 +272,24 @@ async def save_backtest_trades(
 # PnL Snapshots
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_pnl_summary() -> Dict:
-    """Return current aggregate PnL (not persisted)."""
+async def get_pnl_summary(domain: Optional[str] = None, user_id: Optional[str] = None, trade_type: Optional[str] = None) -> Dict:
+    """Return current aggregate PnL (not persisted). Optionally filter by domain/user/trade_type."""
     pool = await get_pool()
+    conditions = []
+    params = []
+    if domain and domain != "all":
+        params.append(domain)
+        conditions.append(f"domain = ${len(params)}")
+    if trade_type:
+        params.append(trade_type)
+        conditions.append(f"trade_type = ${len(params)}")
+    if user_id:
+        from uuid import UUID
+        params.append(UUID(user_id) if not isinstance(user_id, str) else UUID(user_id))
+        conditions.append(f"user_id = ${len(params)}")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*)                                        AS total_trades,
             COUNT(*) FILTER (WHERE status = 'OPEN')        AS open_trades,
@@ -250,8 +299,9 @@ async def get_pnl_summary() -> Dict:
             COALESCE(SUM(pnl)    FILTER (WHERE status != 'OPEN'), 0)  AS realized_pnl,
             COUNT(*) FILTER (WHERE pnl > 0)                AS win_count,
             COUNT(*) FILTER (WHERE pnl < 0)                AS loss_count
-        FROM trades
-        """
+        FROM polycode.trades {where}
+        """,
+        *params,
     )
     if not row:
         return {}
@@ -284,7 +334,7 @@ async def save_pnl_snapshot(run_id: Optional[str] = None) -> Dict:
 
     snap_id = await pool.fetchval(
         """
-        INSERT INTO pnl_snapshots (
+        INSERT INTO polycode.pnl_snapshots (
             run_id, total_invested, total_payout, realized_pnl,
             open_trades, closed_trades, win_count, loss_count,
             win_rate, total_trades, roi_pct
@@ -309,6 +359,6 @@ async def save_pnl_snapshot(run_id: Optional[str] = None) -> Dict:
 async def get_pnl_snapshots(limit: int = 100) -> List[Dict]:
     pool = await get_pool()
     rows = await pool.fetch(
-        "SELECT * FROM pnl_snapshots ORDER BY snapshot_time DESC LIMIT $1", limit
+        "SELECT * FROM polycode.pnl_snapshots ORDER BY snapshot_time DESC LIMIT $1", limit
     )
     return [_record_to_dict(r) for r in rows]

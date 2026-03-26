@@ -296,11 +296,11 @@ class UI:
                 // Handles thin (│ U+2502), thick (┃ U+2503) Rich borders
                 // Extracts ONLY table data rows — no text, no analysis
                 var PIPE_RE = /[\u2502\u2503]/;
-                var BORDER_RE = /^[\u2500-\u257f\u2550-\u256c\u2580-\u259f─━┏┓┗┛┡┩╇╈╭╮╰╯+\-=\s]+$/;
+                var BORDER_RE = /^[\u2500-\u257f\u2550-\u256c\u2580-\u259f\u2500\u2501\u250c-\u2570─━┏┓┗┛┡┩╇╈╭╮╰╯+\-=\s]+$/;
                 function richTextToCSV(text) {
                     var NL = String.fromCharCode(10);
                     var lines = text.split(NL);
-                    var allCsvRows = [];
+                    var rows = [];
                     // Count table vs panel lines
                     var tableCount = 0, panelCount = 0;
                     for (var k = 0; k < lines.length; k++) {
@@ -312,8 +312,8 @@ class UI:
                         else if (n === 1) panelCount++;
                     }
                     if (panelCount > tableCount && tableCount < 2) {
-                        // Panel mode (load AAPL etc.)
-                        allCsvRows.push('Field,Value');
+                        // Panel mode (load AAPL etc.) — key:value pairs
+                        rows.push('Field,Value');
                         for (var i = 0; i < lines.length; i++) {
                             if (!PIPE_RE.test(lines[i])) continue;
                             var c = lines[i].replace(/[\u2502\u2503]/g, '').trim();
@@ -323,10 +323,10 @@ class UI:
                             if (/^(Source|Business)/i.test(c.substring(0, ci).trim())) continue;
                             var key = c.substring(0, ci).trim().replace(/,/g, '');
                             var val = '"' + c.substring(ci + 1).trim().replace(/"/g, "'") + '"';
-                            allCsvRows.push(key + ',' + val);
+                            rows.push(key + ',' + val);
                         }
                     } else {
-                        // Table mode — extract ONLY lines with │ or ┃ data cells
+                        // Table mode — extract ONLY data rows (lines with pipe separators)
                         var prevColCount = 0;
                         for (var i = 0; i < lines.length; i++) {
                             if (!PIPE_RE.test(lines[i])) continue;
@@ -339,17 +339,16 @@ class UI:
                                 cells.push('"' + raw.replace(/"/g, "'") + '"');
                             }
                             if (cells.length >= 2) {
-                                // Insert blank row between tables with different column counts
-                                if (prevColCount > 0 && cells.length !== prevColCount && allCsvRows.length > 0) {
-                                    allCsvRows.push('');
+                                // Blank separator between tables with different column counts
+                                if (prevColCount > 0 && cells.length !== prevColCount && rows.length > 0) {
+                                    rows.push('');
                                 }
-                                allCsvRows.push(cells.join(','));
+                                rows.push(cells.join(','));
                                 prevColCount = cells.length;
                             }
                         }
                     }
-                    }
-                    return csvRows.join(NL);
+                    return rows.join(NL);
                 }
                 function addToolbar(el, getText) {
                     if (el.dataset.enhanced === '1') return;

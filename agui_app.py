@@ -953,15 +953,23 @@ def _left_pane(session):
     parts.append(_help_expanders())
 
     # Navigation links — Dashboard with SSO token if logged in
+    import os, socket
+    def _get_web_url():
+        """Return localhost if web_app is running locally, else prod URL."""
+        try:
+            s = socket.create_connection(("localhost", 4002), timeout=0.5)
+            s.close()
+            return "http://localhost:4002"
+        except OSError:
+            return os.getenv("WEB_APP_URL", "https://app.polytrade.chat")
+
     if user:
         from utils.auth import create_cross_app_token
         sso_token = create_cross_app_token(user["user_id"], user["email"])
-        # Use localhost for dev, prod domain for deployed
-        import os
-        web_host = os.getenv("WEB_APP_URL", "http://localhost:4002")
+        web_host = _get_web_url()
         dashboard_url = f"{web_host}/sso?token={sso_token}"
     else:
-        dashboard_url = "http://localhost:4002"
+        dashboard_url = _get_web_url()
     nav_links = [
         A("Dashboard", href=dashboard_url, target="_blank", cls="nav-link"),
     ]

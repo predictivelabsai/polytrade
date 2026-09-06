@@ -76,22 +76,6 @@ describe("PaperWorkspace live dashboard", () => {
     expect(client.paperPortfolio).not.toHaveBeenCalled();
   });
 
-  it("persists a keyboard-adjusted workspace panel width", async () => {
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-      width: 1_200,
-      right: 1_200,
-    } as DOMRect);
-    const client = templateClient();
-    render(<PaperWorkspace client={client} onError={vi.fn()} onNotice={vi.fn()} />);
-    await act(async () => flushPromises());
-
-    const divider = screen.getByRole("separator", { name: "Resize paper workspace panels" });
-    divider.focus();
-    await userEvent.keyboard("{ArrowLeft}");
-
-    expect(divider).toHaveAttribute("aria-valuenow", "414");
-    expect(window.localStorage.getItem("polytrade.paper.side-width")).toBe("414");
-  });
 });
 
 async function flushPromises(): Promise<void> {

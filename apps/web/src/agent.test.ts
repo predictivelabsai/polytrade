@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AgentApiError, listAgentThreads, runAgentTurn } from "./agent";
+import { AgentApiError, getAgentUsage, listAgentThreads, runAgentTurn } from "./agent";
 
 const THREAD_ID = "11111111-1111-4111-8111-111111111111";
 const REPLACEMENT_THREAD_ID = "22222222-2222-4222-8222-222222222222";
@@ -171,5 +171,104 @@ describe("runAgentTurn", () => {
     await expect(
       listAgentThreads("https://api.polytrade.test", async () => "browser-jwt"),
     ).rejects.toEqual(new AgentApiError("Agent service is unavailable", 502));
+  });
+
+  it("sends the selected runtime on the stream body and omits it by default", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(streamResponse())
+      .mockResolvedValueOnce(streamResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const handlers = {
+      onThreadId: () => undefined,
+      onMessageStart: () => undefined,
+      onMessageText: () => undefined,
+      onProposal: () => undefined,
+    };
+
+    await runAgentTurn({
+      apiUrl: "https://api.polytrade.test",
+      getToken: async () => "browser-jwt",
+      threadId: THREAD_ID,
+      text: "Ask Hermes",
+      runtime: "hermes",
+      handlers,
+    });
+    await runAgentTurn({
+      apiUrl: "https://api.polytrade.test",
+      getToken: async () => "browser-jwt",
+      threadId: THREAD_ID,
+      text: "Ask DeepSeek",
+      handlers,
+    });
+
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(bodies[0]).toEqual({ message: "Ask Hermes", runtime: "hermes" });
+    expect(bodies[1]).toEqual({ message: "Ask DeepSeek" });
+  });
+
+  it("surfaces usage notices and runtime fallback as typed notices", async () => {
+    const body = [
+      `event: run.started\ndata: {"runId":"run","threadId":"${THREAD_ID}"}\n\n`,
+      `event: usage.notice\ndata: {"kind":"quota_warning","message":"You have used 4 of 5 platform-funded queries today."}\n\n`,
+      `event: runtime.fallback\ndata: {"from":"hermes","to":"deepseek","reason":"hermes_unavailable"}\n\n`,
+      "event: message.started\ndata: {\"messageId\":\"assistant-1\"}\n\n",
+      "event: message.delta\ndata: {\"messageId\":\"assistant-1\",\"textDelta\":\"Fallback answer\"}\n\n",
+      "event: run.completed\ndata: {\"runId\":\"run\"}\n\n",
+    ].join("");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+      ),
+    );
+    const notices: Array<{ kind: string; message: string }> = [];
+
+    await runAgentTurn({
+      apiUrl: "https://api.polytrade.test",
+      getToken: async () => "browser-jwt",
+      threadId: THREAD_ID,
+      text: "Ask Hermes",
+      handlers: {
+        onThreadId: () => undefined,
+        onMessageStart: () => undefined,
+        onMessageText: () => undefined,
+        onProposal: () => undefined,
+        onNotice: (notice) => notices.push(notice),
+      },
+    });
+
+    expect(notices).toEqual([
+      { kind: "quota_warning", message: "You have used 4 of 5 platform-funded queries today." },
+      { kind: "runtime_fallback", message: "Hermes was unavailable, so DeepSeek answered." },
+    ]);
+  });
+
+  it("fetches the typed platform usage summary", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      Response.json({
+        fundingSource: "platform",
+        used: 2,
+        limit: 5,
+        remaining: 3,
+        costUsd: "0.012345",
+        platformCostUsd: "0.012345",
+        platformBudgetUsd: "5",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getAgentUsage("https://api.polytrade.test", async () => "browser-jwt")).resolves.toEqual({
+      used: 2,
+      limit: 5,
+      remaining: 3,
+      costUsd: "0.012345",
+      platformCostUsd: "0.012345",
+      platformBudgetUsd: "5",
+    });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.polytrade.test/v1/agent/usage");
+    expect(new Headers((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).get("Authorization")).toBe(
+      "Bearer browser-jwt",
+    );
   });
 });

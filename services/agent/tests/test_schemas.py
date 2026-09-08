@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from polytrade_agent.schemas import TradingActionProposal
+from polytrade_agent.schemas import AgentRunRequest, AgentUsageResponse, TradingActionProposal
 
 adapter = TypeAdapter(TradingActionProposal)
 
@@ -56,3 +56,23 @@ def test_contract_serializes_camel_case_and_rejects_noncanonical_decimals() -> N
         adapter.validate_python({**base(), "execution": "GTC", "price": "0.1234567", "size": "10"})
     with pytest.raises(ValidationError):
         adapter.validate_python({**base(), "execution": "FOK", "amount": "0", "limit_price": "0.5"})
+
+
+def test_run_request_runtime_defaults_and_rejects_unknown_runtimes() -> None:
+    assert AgentRunRequest.model_validate({"message": "Hi"}).runtime == "deepseek"
+    hermes = AgentRunRequest.model_validate({"message": "Hi", "runtime": "hermes"})
+    assert hermes.runtime == "hermes"
+    with pytest.raises(ValidationError):
+        AgentRunRequest.model_validate({"message": "Hi", "runtime": "gpt-4"})
+
+
+def test_usage_response_defaults_costs_to_zero_decimals() -> None:
+    response = AgentUsageResponse(used=2, limit=5, remaining=3)
+    assert response.funding_source == "platform"
+    assert (response.cost_usd, response.platform_cost_usd, response.platform_budget_usd) == (
+        "0",
+        "0",
+        "0",
+    )
+    with pytest.raises(ValidationError):
+        AgentUsageResponse(used=-1, limit=5, remaining=5)

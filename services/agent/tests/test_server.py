@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -13,7 +14,8 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from polytrade_agent.auth import AuthenticatedPrincipal
-from polytrade_agent.config import get_settings
+from polytrade_agent.config import AgentSettings, get_settings
+from polytrade_agent.model import MODEL_ID
 from polytrade_agent.schemas import RestingOrderProposal, UnsignedProposalEnvelope
 from polytrade_agent.server import (
     AgentServices,
@@ -25,6 +27,7 @@ from polytrade_agent.server import (
     require_principal,
 )
 from polytrade_agent.storage import ThreadRecord
+from polytrade_agent.usage import QueryAuthorization
 
 
 def test_thread_title_collapses_whitespace_and_limits_length() -> None:
@@ -59,6 +62,59 @@ class FakeRepository:
         self.touched = False
         self.deleted = False
         self.lease = FakeLease()
+        # Usage-gate state (mirrors the agent_daily_usage / agent_llm_usage rows).
+        self.queries_used = 0
+        self.daily_cost = Decimal("0")
+        self.exhausted = False
+        self.refunds = 0
+        self.activity_starts: list[dict[str, Any]] = []
+        self.activity_completions: list[dict[str, Any]] = []
+        self.usage_rows: list[dict[str, Any]] = []
+
+    async def authorize_daily_query(self, _principal_id: str, limit: int) -> int | None:
+        if self.exhausted or self.queries_used >= limit:
+            return None
+        self.queries_used += 1
+        return self.queries_used
+
+    async def refund_daily_query(self, _principal_id: str) -> None:
+        self.refunds += 1
+        self.queries_used = max(self.queries_used - 1, 0)
+
+    async def sum_daily_cost(self) -> Decimal:
+        return self.daily_cost
+
+    async def used_queries_today(self, _principal_id: str) -> int:
+        return self.queries_used
+
+    async def insert_llm_usage(self, **kwargs: Any) -> None:
+        self.usage_rows.append(kwargs)
+
+    async def insert_activity(self, **kwargs: Any) -> None:
+        self.activity_starts.append(kwargs)
+
+    async def complete_activity(self, **kwargs: Any) -> None:
+        self.activity_completions.append(kwargs)
+
+    async def admin_usage_summary(self) -> dict[str, Any]:
+        return {
+            "usage_date": datetime.now(UTC),
+            "by_runtime": [
+                {
+                    "runtime": "deepseek",
+                    "calls": 2,
+                    "total_tokens": 900,
+                    "estimated_cost_usd": Decimal("0.50"),
+                }
+            ],
+            "by_principal": [
+                {
+                    "principal_id": self.principal_id,
+                    "queries_used": 2,
+                    "estimated_cost_usd": Decimal("0.50"),
+                }
+            ],
+        }
 
     async def create_thread(self, principal_id: str) -> ThreadRecord:
         assert principal_id == self.principal_id
@@ -144,15 +200,21 @@ class FakeGraph:
         fail: bool = False,
         timeout: bool = False,
         backtest_count: int = 0,
+        fail_immediately: bool = False,
+        usage_metadata: dict[str, int] | None = None,
     ) -> None:
         self.envelope = envelope
         self.fail = fail
         self.timeout = timeout
         self.backtest_count = backtest_count
+        self.fail_immediately = fail_immediately
+        self.usage_metadata = usage_metadata
         self.call: dict[str, Any] = {}
 
     async def astream(self, input: Any, **kwargs: Any):
         self.call = {"input": input, **kwargs}
+        if self.fail_immediately:
+            raise RuntimeError("sidecar upstream is unreachable")
         yield (
             "messages",
             (
@@ -160,6 +222,7 @@ class FakeGraph:
                     content="Current market answer",
                     id="assistant-message",
                     additional_kwargs={"reasoning_content": "never expose this"},
+                    usage_metadata=self.usage_metadata,
                 ),
                 {"langgraph_step": 1},
             ),
@@ -267,15 +330,18 @@ def make_client(
     fail: bool = False,
     timeout: bool = False,
     backtest_count: int = 0,
+    settings: AgentSettings | None = None,
+    graphs: dict[str, Any] | None = None,
+    repository: FakeRepository | None = None,
 ) -> tuple[httpx.AsyncClient, FakeRepository, FakeGraph, FakeCheckpointer]:
-    settings = get_settings()
+    settings = settings or get_settings()
     principal = AuthenticatedPrincipal(
         identity="assethero:user-123",
         issuer="assethero",
         scopes=("research", "trade"),
         bearer="short-lived-browser-token",
     )
-    repository = FakeRepository(principal.identity, busy=busy)
+    repository = repository or FakeRepository(principal.identity, busy=busy)
     graph = FakeGraph(
         proposal_envelope,
         fail=fail,
@@ -288,7 +354,8 @@ def make_client(
     application.state.services = AgentServices(
         settings=settings,
         storage=storage,
-        graph=graph,
+        graph=graphs["deepseek"] if graphs else graph,
+        graphs=graphs,
         limiter=RunLimiter(2),
     )
     application.dependency_overrides[require_principal] = lambda: principal
@@ -508,6 +575,8 @@ async def test_disconnect_marks_run_cancelled_and_releases_capacity(proposal_env
         run_id=run_id,
         message="Question",
         lease=repository.lease,
+        requested_runtime="deepseek",
+        authorization=QueryAuthorization("platform", 1, settings.FREE_PLATFORM_QUERY_LIMIT),
     )
 
     assert (await anext(stream))["event"] == "run.started"
@@ -545,3 +614,304 @@ async def test_expired_thread_cleanup_removes_checkpoint_and_metadata(proposal_e
     assert checkpointer.deleted == [str(repository.thread_id)]
     assert repository.deleted is True
     assert repository.lease.released is True
+
+
+def make_settings(**overrides: Any) -> AgentSettings:
+    return AgentSettings.model_validate({**get_settings().model_dump(), **overrides})
+
+
+HERMES_SETTINGS = {
+    "HERMES_API_URL": "http://hermes.test:8642/v1",
+    "HERMES_API_SERVER_KEY": "sidecar-shared-secret",
+}
+
+
+@pytest.mark.asyncio
+async def test_hermes_runtime_requires_configuration(proposal_envelope) -> None:
+    client, repository, graph, _checkpointer = make_client(proposal_envelope)
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask Hermes", "runtime": "hermes"},
+        )
+
+    assert response.status_code == 400
+    assert "Hermes runtime is not available" in response.text
+    assert repository.finished == []
+    assert repository.activity_starts == []
+    assert graph.call == {}
+
+
+@pytest.mark.asyncio
+async def test_quota_exhaustion_returns_429_and_releases_capacity(proposal_envelope) -> None:
+    settings = get_settings()
+    principal = AuthenticatedPrincipal(
+        identity="assethero:user-123",
+        issuer="assethero",
+        scopes=("research",),
+        bearer="ephemeral-jwt",
+    )
+    repository = FakeRepository(principal.identity)
+    repository.queries_used = settings.FREE_PLATFORM_QUERY_LIMIT
+    limiter = RunLimiter(2)
+    assert await limiter.try_acquire()  # one unrelated in-flight run
+    services = AgentServices(
+        settings=settings,
+        storage=SimpleNamespace(repository=repository, checkpointer=FakeCheckpointer()),
+        graph=FakeGraph(proposal_envelope),
+        graphs={"deepseek": FakeGraph(proposal_envelope)},
+        limiter=limiter,
+    )
+    application = create_app(settings)
+    application.state.services = services
+    application.dependency_overrides[require_principal] = lambda: principal
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=application),
+        base_url="https://agent.polytrade.test",
+    ) as client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "One query too many"},
+        )
+
+    assert response.status_code == 429
+    assert "platform-funded AI queries" in response.text
+    assert repository.finished == []  # create_run never happened
+    assert repository.activity_starts == []
+    assert repository.lease.released is True
+    assert limiter.active == 1  # the gated run released; the unrelated run kept
+
+
+@pytest.mark.asyncio
+async def test_platform_budget_exhaustion_returns_429(proposal_envelope) -> None:
+    repository = FakeRepository("assethero:user-123")
+    repository.daily_cost = Decimal("5.00")
+    client, repository, _graph, _checkpointer = make_client(
+        proposal_envelope,
+        repository=repository,
+        settings=make_settings(PLATFORM_LLM_DAILY_BUDGET_USD=5.0),
+    )
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask anyway"},
+        )
+
+    assert response.status_code == 429
+    assert "daily AI budget" in response.text
+    assert repository.finished == []
+    assert repository.queries_used == 0
+
+
+@pytest.mark.asyncio
+async def test_hermes_falls_back_to_deepseek_when_nothing_streamed(proposal_envelope) -> None:
+    deepseek_graph = FakeGraph(proposal_envelope)
+    hermes_graph = FakeGraph(proposal_envelope, fail_immediately=True)
+    client, repository, _graph, checkpointer = make_client(
+        proposal_envelope,
+        settings=make_settings(**HERMES_SETTINGS),
+        graphs={"deepseek": deepseek_graph, "hermes": hermes_graph},
+    )
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask Hermes", "runtime": "hermes"},
+        )
+
+    assert response.status_code == 200
+    assert "event: runtime.fallback" in response.text
+    assert '"from":"hermes"' in response.text and '"to":"deepseek"' in response.text
+    assert "Current market answer" in response.text
+    assert "event: run.completed" in response.text
+    assert "event: run.failed" not in response.text
+    assert hermes_graph.call != {} and deepseek_graph.call != {}
+    # The abandoned run-thread checkpoint is deleted once, before the DeepSeek
+    # attempt re-seeds from the canonical thread state.
+    assert len(checkpointer.deleted) == 1
+    assert repository.finished[0][1:] == ("completed", None)
+    assert repository.refunds == 0  # the user saw an answer; the slot is kept
+    completion = repository.activity_completions[0]
+    assert completion["status"] == "completed"
+    assert completion["metadata"]["fallback"] is True
+    assert completion["metadata"]["runtime"] == "deepseek"
+    assert completion["metadata"]["requested_runtime"] == "hermes"
+
+
+@pytest.mark.asyncio
+async def test_partial_hermes_stream_fails_instead_of_falling_back(proposal_envelope) -> None:
+    hermes_graph = FakeGraph(proposal_envelope, fail=True)
+    deepseek_graph = FakeGraph(proposal_envelope)
+    client, repository, _graph, _checkpointer = make_client(
+        proposal_envelope,
+        settings=make_settings(**HERMES_SETTINGS),
+        graphs={"deepseek": deepseek_graph, "hermes": hermes_graph},
+    )
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask Hermes", "runtime": "hermes"},
+        )
+
+    assert response.status_code == 200
+    assert "event: run.failed" in response.text
+    assert "event: runtime.fallback" not in response.text
+    assert deepseek_graph.call == {}  # never retried after client-visible output
+    assert repository.finished[0][1:] == ("failed", "run_failed")
+    assert repository.refunds == 0  # text was streamed; the slot is consumed
+
+
+@pytest.mark.asyncio
+async def test_failed_run_without_content_refunds_the_query_slot(proposal_envelope) -> None:
+    deepseek_graph = FakeGraph(proposal_envelope, fail_immediately=True)
+    client, repository, _graph, checkpointer = make_client(
+        proposal_envelope,
+        graphs={"deepseek": deepseek_graph},
+    )
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Break the run"},
+        )
+
+    assert response.status_code == 200
+    assert "event: run.failed" in response.text
+    assert repository.finished[0][1:] == ("failed", "run_failed")
+    assert repository.refunds == 1
+    assert repository.queries_used == 0
+    assert len(checkpointer.deleted) == 1
+
+
+@pytest.mark.asyncio
+async def test_quota_warning_notice_is_streamed_at_eighty_percent(proposal_envelope) -> None:
+    repository = FakeRepository("assethero:user-123")
+    repository.queries_used = 7
+    client, repository, _graph, _checkpointer = make_client(
+        proposal_envelope,
+        repository=repository,
+        settings=make_settings(FREE_PLATFORM_QUERY_LIMIT=10),
+    )
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask a question"},
+        )
+
+    assert response.status_code == 200
+    assert "event: run.completed" in response.text
+    assert "event: usage.notice" in response.text
+    assert '"kind":"quota_warning"' in response.text
+    assert "8 of 10" in response.text
+    assert repository.queries_used == 8
+
+
+@pytest.mark.asyncio
+async def test_measured_usage_is_recorded_per_message_id(proposal_envelope) -> None:
+    deepseek_graph = FakeGraph(
+        proposal_envelope,
+        usage_metadata={"input_tokens": 12, "output_tokens": 30, "total_tokens": 42},
+    )
+    client, repository, _graph, _checkpointer = make_client(
+        proposal_envelope,
+        graphs={"deepseek": deepseek_graph},
+    )
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask a question"},
+        )
+
+    assert response.status_code == 200
+    assert "event: run.completed" in response.text
+    assert len(repository.usage_rows) == 1
+    row = repository.usage_rows[0]
+    assert row["runtime"] == "deepseek"
+    assert row["provider"] == "deepseek"
+    assert row["model"] == MODEL_ID
+    assert row["input_tokens"] == 12 and row["output_tokens"] == 30
+    assert row["usage_quality"] == "measured"
+    assert row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_unmeasured_run_records_a_single_estimate(proposal_envelope) -> None:
+    client, repository, _graph, _checkpointer = make_client(proposal_envelope)
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Ask a question"},
+        )
+
+    assert response.status_code == 200
+    assert len(repository.usage_rows) == 1
+    row = repository.usage_rows[0]
+    assert row["runtime"] == "deepseek" and row["provider"] == "deepseek"
+    assert row["usage_quality"] == "estimated"
+    assert row["input_tokens"] > 0 and row["output_tokens"] > 0
+    assert row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_usage_endpoint_reports_remaining_allowance(proposal_envelope) -> None:
+    repository = FakeRepository("assethero:user-123")
+    repository.queries_used = 2
+    repository.daily_cost = Decimal("1.250000")
+    client, repository, _graph, _checkpointer = make_client(
+        proposal_envelope,
+        repository=repository,
+    )
+    async with client:
+        response = await client.get("/v1/agent/usage")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["fundingSource"] == "platform"
+    assert payload["used"] == 2 and payload["limit"] == 5 and payload["remaining"] == 3
+    assert payload["costUsd"] == "1.25"
+    assert payload["platformCostUsd"] == "1.25"
+    assert payload["platformBudgetUsd"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_admin_usage_endpoint_requires_an_admin_identity(proposal_envelope) -> None:
+    client, _repository, _graph, _checkpointer = make_client(proposal_envelope)
+    async with client:
+        forbidden = await client.get("/v1/agent/admin/usage")
+
+    assert forbidden.status_code == 403
+    assert "Admin access required" in forbidden.text
+
+    admin_client, _repository, _graph, _checkpointer = make_client(
+        proposal_envelope,
+        settings=make_settings(ADMIN_PRINCIPAL_IDS="clerk:other,assethero:user-123"),
+    )
+    async with admin_client:
+        allowed = await admin_client.get("/v1/agent/admin/usage")
+
+    assert allowed.status_code == 200
+    payload = allowed.json()
+    assert payload["byRuntime"][0]["runtime"] == "deepseek"
+    assert payload["byRuntime"][0]["calls"] == 2
+    assert payload["byRuntime"][0]["estimatedCostUsd"] == "0.5"
+    assert payload["byPrincipal"][0]["principalId"] == "assethero:user-123"
+    assert payload["byPrincipal"][0]["queriesUsed"] == 2
+
+
+@pytest.mark.asyncio
+async def test_activity_log_redacts_secrets_from_prompt_and_response(proposal_envelope) -> None:
+    client, repository, _graph, _checkpointer = make_client(proposal_envelope)
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Use xai-leakykey12345 and api_key=hunter2 please"},
+        )
+
+    assert response.status_code == 200
+    start = repository.activity_starts[0]
+    assert start["principal_id"] == "assethero:user-123"
+    assert start["requested_runtime"] == "deepseek"
+    assert "xai-leakykey12345" not in start["request_text"]
+    assert "hunter2" not in start["request_text"]
+    completion = repository.activity_completions[0]
+    assert completion["status"] == "completed"
+    assert completion["response_text"] == "Current market answer"
+    assert set(completion["metadata"]) == {"runtime", "requested_runtime", "fallback", "code"}

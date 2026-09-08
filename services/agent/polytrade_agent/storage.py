@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Literal
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -60,6 +62,9 @@ class AgentRepository:
                 SELECT
                     to_regclass('polytrade_agent.agent_threads') IS NOT NULL
                     AND to_regclass('polytrade_agent.agent_runs') IS NOT NULL
+                    AND to_regclass('polytrade_agent.agent_activity') IS NOT NULL
+                    AND to_regclass('polytrade_agent.agent_llm_usage') IS NOT NULL
+                    AND to_regclass('polytrade_agent.agent_daily_usage') IS NOT NULL
                     AND to_regclass('polytrade_agent.checkpoint_migrations') IS NOT NULL
                     AND to_regclass('polytrade_agent.checkpoints') IS NOT NULL
                     AND to_regclass('polytrade_agent.checkpoint_blobs') IS NOT NULL
@@ -459,6 +464,198 @@ class AgentRepository:
         except BaseException:
             await self.pool.putconn(connection)
             raise
+
+    async def authorize_daily_query(self, principal_id: str, limit: int) -> int | None:
+        """Atomically claim a daily query slot; None when the limit is exhausted."""
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                INSERT INTO polytrade_agent.agent_daily_usage (principal_id, usage_date)
+                VALUES (%s, CURRENT_DATE)
+                ON CONFLICT (principal_id, usage_date) DO NOTHING
+                """,
+                (principal_id,),
+            )
+            cursor = await connection.execute(
+                """
+                UPDATE polytrade_agent.agent_daily_usage
+                SET queries_used = queries_used + 1, updated_at = now()
+                WHERE principal_id = %s AND usage_date = CURRENT_DATE
+                  AND queries_used < %s
+                RETURNING queries_used
+                """,
+                (principal_id, limit),
+            )
+            row = await cursor.fetchone()
+        return int(row["queries_used"]) if row else None
+
+    async def refund_daily_query(self, principal_id: str) -> None:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                UPDATE polytrade_agent.agent_daily_usage
+                SET queries_used = GREATEST(queries_used - 1, 0), updated_at = now()
+                WHERE principal_id = %s AND usage_date = CURRENT_DATE
+                """,
+                (principal_id,),
+            )
+
+    async def sum_daily_cost(self) -> Decimal:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT COALESCE(SUM(estimated_cost_usd), 0) AS spent
+                FROM polytrade_agent.agent_llm_usage
+                WHERE status = 'completed'
+                  AND created_at >= date_trunc('day', now())
+                """
+            )
+            row = await cursor.fetchone()
+        return Decimal(str(row["spent"] or 0)) if row else Decimal("0")
+
+    async def used_queries_today(self, principal_id: str) -> int:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT queries_used FROM polytrade_agent.agent_daily_usage
+                WHERE principal_id = %s AND usage_date = CURRENT_DATE
+                """,
+                (principal_id,),
+            )
+            row = await cursor.fetchone()
+        return int(row["queries_used"]) if row else 0
+
+    async def insert_llm_usage(
+        self,
+        *,
+        principal_id: str,
+        run_id: UUID,
+        thread_id: UUID,
+        runtime: str,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: Decimal,
+        usage_quality: str,
+        status: str = "completed",
+    ) -> None:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                INSERT INTO polytrade_agent.agent_llm_usage (
+                    principal_id, run_id, thread_id, runtime, provider, model,
+                    input_tokens, output_tokens, total_tokens, estimated_cost_usd,
+                    usage_quality, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    principal_id,
+                    run_id,
+                    thread_id,
+                    runtime,
+                    provider,
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    estimated_cost_usd,
+                    usage_quality,
+                    status,
+                ),
+            )
+
+    async def insert_activity(
+        self,
+        *,
+        run_id: UUID,
+        thread_id: UUID,
+        principal_id: str,
+        requested_runtime: str,
+        runtime: str,
+        request_text: str,
+    ) -> None:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                INSERT INTO polytrade_agent.agent_activity (
+                    run_id, thread_id, principal_id, requested_runtime, runtime,
+                    request_text
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_id) DO NOTHING
+                """,
+                (run_id, thread_id, principal_id, requested_runtime, runtime, request_text),
+            )
+
+    async def complete_activity(
+        self,
+        *,
+        run_id: UUID,
+        status: str,
+        error_code: str | None,
+        response_text: str | None,
+        metadata: dict[str, Any],
+    ) -> None:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                UPDATE polytrade_agent.agent_activity
+                SET status = %s,
+                    error_code = %s,
+                    response_text = %s,
+                    metadata = %s::jsonb,
+                    completed_at = now()
+                WHERE run_id = %s
+                """,
+                (
+                    status,
+                    error_code,
+                    response_text,
+                    json.dumps(metadata, default=str),
+                    run_id,
+                ),
+            )
+
+    async def admin_usage_summary(self) -> dict[str, Any]:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                SELECT runtime,
+                       COUNT(*) AS calls,
+                       COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                       COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+                FROM polytrade_agent.agent_llm_usage
+                WHERE status = 'completed'
+                  AND created_at >= date_trunc('day', now())
+                GROUP BY runtime
+                ORDER BY estimated_cost_usd DESC
+                """
+            )
+            by_runtime = await cursor.fetchall()
+            cursor = await connection.execute(
+                """
+                SELECT principal_id,
+                       queries_used,
+                       COALESCE(spend.estimated_cost_usd, 0) AS estimated_cost_usd
+                FROM polytrade_agent.agent_daily_usage AS daily
+                LEFT JOIN LATERAL (
+                    SELECT SUM(estimated_cost_usd) AS estimated_cost_usd
+                    FROM polytrade_agent.agent_llm_usage
+                    WHERE principal_id = daily.principal_id
+                      AND status = 'completed'
+                      AND created_at >= date_trunc('day', now())
+                ) AS spend ON TRUE
+                WHERE usage_date = CURRENT_DATE AND queries_used > 0
+                ORDER BY estimated_cost_usd DESC
+                """
+            )
+            by_principal = await cursor.fetchall()
+        return {
+            "usage_date": date.today(),
+            "by_runtime": [dict(row) for row in by_runtime],
+            "by_principal": [dict(row) for row in by_principal],
+        }
 
     async def expired_thread_ids(self, limit: int = 100) -> list[UUID]:
         async with self.pool.connection() as connection:

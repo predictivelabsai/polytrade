@@ -478,6 +478,67 @@ CREATE UNIQUE INDEX IF NOT EXISTS agent_predictions_open_claim_idx
     ON polytrade_agent.agent_predictions (principal_id, condition_id, lower(predicted_outcome))
     WHERE status = 'PENDING';
 
+-- Redacted per-run activity log (ported from the legacy chat stack's
+-- user_logging). No foreign keys: logging must survive the run/thread
+-- lifecycle and thread deletion.
+CREATE TABLE IF NOT EXISTS polytrade_agent.agent_activity (
+    activity_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id uuid NOT NULL UNIQUE,
+    thread_id uuid,
+    principal_id text NOT NULL,
+    requested_runtime text NOT NULL DEFAULT 'deepseek'
+        CHECK (requested_runtime IN ('deepseek', 'hermes')),
+    runtime text NOT NULL DEFAULT 'deepseek'
+        CHECK (runtime IN ('deepseek', 'hermes')),
+    fallback_used boolean NOT NULL DEFAULT false,
+    status text NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
+    error_code text,
+    request_text text NOT NULL DEFAULT '',
+    response_text text,
+    metadata jsonb NOT NULL DEFAULT '{}',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS agent_activity_owner_created_idx
+    ON polytrade_agent.agent_activity (principal_id, created_at DESC);
+
+-- One row per LLM call (ported from the legacy llm_usage_logging). Cost is a
+-- configured estimate from token counts, not a bill.
+CREATE TABLE IF NOT EXISTS polytrade_agent.agent_llm_usage (
+    usage_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    principal_id text NOT NULL,
+    run_id uuid,
+    thread_id uuid,
+    runtime text NOT NULL CHECK (runtime IN ('deepseek', 'hermes')),
+    provider text NOT NULL,
+    model text NOT NULL,
+    input_tokens bigint NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+    output_tokens bigint NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+    total_tokens bigint NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
+    estimated_cost_usd numeric(14, 6) NOT NULL DEFAULT 0 CHECK (estimated_cost_usd >= 0),
+    usage_quality text NOT NULL DEFAULT 'estimated'
+        CHECK (usage_quality IN ('measured', 'estimated', 'unavailable')),
+    status text NOT NULL DEFAULT 'completed' CHECK (status IN ('completed', 'failed')),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS agent_llm_usage_created_idx
+    ON polytrade_agent.agent_llm_usage (created_at);
+CREATE INDEX IF NOT EXISTS agent_llm_usage_owner_created_idx
+    ON polytrade_agent.agent_llm_usage (principal_id, created_at DESC);
+
+-- Atomic daily query slots. The conditional UPDATE is the concurrency control:
+-- a claim past the limit returns no row instead of over-counting.
+CREATE TABLE IF NOT EXISTS polytrade_agent.agent_daily_usage (
+    principal_id text NOT NULL,
+    usage_date date NOT NULL DEFAULT CURRENT_DATE,
+    queries_used integer NOT NULL DEFAULT 0 CHECK (queries_used >= 0),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (principal_id, usage_date)
+);
+
 CREATE TABLE IF NOT EXISTS polytrade_backtest.backtest_runs (
     run_id uuid PRIMARY KEY,
     principal_id text NOT NULL,

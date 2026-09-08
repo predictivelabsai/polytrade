@@ -21,13 +21,16 @@ from langchain_core.messages import (
 )
 from sse_starlette.sse import EventSourceResponse
 
+from .activity import record_activity_complete, record_activity_start
 from .auth import AuthenticatedPrincipal, get_verifier
 from .config import AgentSettings, enforce_no_langsmith, get_settings
 from .context import AgentRunContext
 from .graph import build_agent
-from .model import build_model
+from .model import MODEL_ID, build_hermes_model, build_model
 from .schemas import (
+    AdminUsageResponse,
     AgentRunRequest,
+    AgentUsageResponse,
     BacktestRunReference,
     PublicBacktest,
     PublicMessage,
@@ -39,6 +42,21 @@ from .schemas import (
     UnsignedProposalEnvelope,
 )
 from .storage import AgentStorage, ThreadLease, open_storage
+from .usage import (
+    DailyBudgetExceeded,
+    QueryAuthorization,
+    QueryLimitExceeded,
+    TokenUsage,
+    admin_usage_summary,
+    allowance_warning,
+    authorize_query,
+    budget_warning,
+    estimate_usage,
+    extract_usage,
+    record_llm_usage,
+    refund_query,
+    usage_status,
+)
 
 logger = logging.getLogger("polytrade.agent")
 
@@ -81,6 +99,12 @@ class AgentServices:
     storage: AgentStorage
     graph: Any
     limiter: RunLimiter
+    graphs: dict[str, Any] | None = None
+
+
+def _runtime_graph(services: AgentServices, runtime: str) -> Any:
+    graphs = services.graphs or {"deepseek": services.graph}
+    return graphs.get(runtime) or graphs["deepseek"]
 
 
 async def require_principal(
@@ -156,10 +180,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             raise RuntimeError("Agent database schema is not ready")
         await storage.repository.mark_interrupted_runs()
         model = build_model(settings)
+        graphs: dict[str, Any] = {
+            "deepseek": build_agent(model=model, checkpointer=storage.checkpointer),
+        }
+        if settings.hermes_configured:
+            # Fail startup loudly: hermes_configured is the operator's contract.
+            graphs["hermes"] = build_agent(
+                model=build_hermes_model(settings),
+                checkpointer=storage.checkpointer,
+            )
         services = AgentServices(
             settings=settings,
             storage=storage,
-            graph=build_agent(model=model, checkpointer=storage.checkpointer),
+            graph=graphs["deepseek"],
+            graphs=graphs,
             limiter=RunLimiter(settings.AGENT_MAX_CONCURRENT_RUNS),
         )
         app.state.services = services
@@ -312,6 +346,11 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Message length is invalid",
             )
+        if body.runtime == "hermes" and not services.settings.hermes_configured:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Hermes runtime is not available",
+            )
         await _require_owned_thread(services, thread_id, principal.identity)
         if not await services.limiter.try_acquire():
             raise HTTPException(
@@ -327,12 +366,32 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
                     detail="Thread already has an active run",
                 )
             await _require_owned_thread(services, thread_id, principal.identity)
+            try:
+                authorization = await authorize_query(
+                    services.storage.repository,
+                    services.settings,
+                    principal.identity,
+                )
+            except (QueryLimitExceeded, DailyBudgetExceeded) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=str(exc),
+                ) from exc
             await services.storage.repository.set_initial_title(
                 thread_id,
                 principal.identity,
                 _thread_title(message),
             )
             run_id = await services.storage.repository.create_run(thread_id, principal.identity)
+            await record_activity_start(
+                services.storage.repository,
+                run_id=run_id,
+                thread_id=thread_id,
+                principal_id=principal.identity,
+                requested_runtime=body.runtime,
+                runtime=body.runtime,
+                request_text=message,
+            )
         except BaseException:
             if lease is not None:
                 await lease.release()
@@ -348,6 +407,8 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
                 run_id=run_id,
                 message=message,
                 lease=lease,
+                requested_runtime=body.runtime,
+                authorization=authorization,
             ),
             ping=15,
             send_timeout=30,
@@ -356,6 +417,31 @@ def create_app(settings: AgentSettings | None = None) -> FastAPI:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @application.get("/v1/agent/usage", response_model=AgentUsageResponse)
+    async def get_usage(
+        request: Request,
+        principal: Annotated[AuthenticatedPrincipal, Depends(require_principal)],
+    ) -> AgentUsageResponse:
+        services = get_services(request)
+        return await usage_status(
+            services.storage.repository,
+            services.settings,
+            principal.identity,
+        )
+
+    @application.get("/v1/agent/admin/usage", response_model=AdminUsageResponse)
+    async def get_admin_usage(
+        request: Request,
+        principal: Annotated[AuthenticatedPrincipal, Depends(require_principal)],
+    ) -> AdminUsageResponse:
+        services = get_services(request)
+        if principal.identity not in services.settings.admin_principal_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+        return await admin_usage_summary(services.storage.repository)
 
     return application
 
@@ -382,85 +468,159 @@ async def _stream_agent_run(
     run_id: UUID,
     message: str,
     lease: ThreadLease,
+    requested_runtime: str,
+    authorization: QueryAuthorization,
 ) -> AsyncIterator[dict[str, str]]:
     status_value: Literal["completed", "failed", "cancelled"] = "failed"
     error_code: str | None = "run_failed"
     run_committed = False
-    started_messages: set[str] = set()
-    emitted_proposals: set[str] = set()
-    emitted_backtests: set[str] = set()
+    emitted_any = False
+    fallback_used = False
+    runtime = requested_runtime
+    # Keyed by message id -> (attempt runtime, measured usage); one row per
+    # LLM call, last write wins within a call.
+    observed_usage: dict[str, tuple[str, TokenUsage]] = {}
+    response_parts: list[str] = []
+    attempt_runtimes = [requested_runtime]
+    if requested_runtime == "hermes" and "deepseek" in (services.graphs or {}):
+        attempt_runtimes.append("deepseek")
     yield _sse("run.started", {"runId": str(run_id), "threadId": str(thread_id)})
     try:
+        notice = allowance_warning(authorization)
+        if notice:
+            yield _sse("usage.notice", {"kind": "quota_warning", "message": notice})
+        budget = await budget_warning(services.storage.repository, services.settings)
+        if budget:
+            yield _sse("usage.notice", {"kind": "budget_warning", "message": budget})
         context = AgentRunContext(
             principal_id=principal.identity,
             scopes=principal.scopes,
             gateway_bearer=principal.bearer,
         )
-        run_input = await _isolated_run_input(services.graph, thread_id, message)
-        async with asyncio.timeout(services.settings.AGENT_RUN_TIMEOUT_SECONDS):
-            stream = services.graph.astream(
-                run_input,
-                config=_thread_config(run_id),
-                context=context,
-                stream_mode=["messages", "updates"],
-                durability="exit",
-            )
-            async for mode, payload in stream:
+        for attempt_index, attempt_runtime in enumerate(attempt_runtimes):
+            runtime = attempt_runtime
+            graph = _runtime_graph(services, runtime)
+            run_input = await _isolated_run_input(graph, thread_id, message)
+            started_messages: set[str] = set()
+            emitted_proposals: set[str] = set()
+            emitted_backtests: set[str] = set()
+            attempt_had_measured_usage = False
+            try:
+                async with asyncio.timeout(services.settings.AGENT_RUN_TIMEOUT_SECONDS):
+                    stream = graph.astream(
+                        run_input,
+                        config=_thread_config(run_id),
+                        context=context,
+                        stream_mode=["messages", "updates"],
+                        durability="exit",
+                    )
+                    async for mode, payload in stream:
+                        if await request.is_disconnected():
+                            raise asyncio.CancelledError
+                        if mode == "messages":
+                            chunk, metadata = payload
+                            if isinstance(chunk, AIMessageChunk):
+                                usage = extract_usage(getattr(chunk, "usage_metadata", None))
+                                if usage.quality == "measured":
+                                    message_id = _stream_message_id(chunk, metadata, run_id)
+                                    observed_usage[message_id] = (runtime, usage)
+                                    attempt_had_measured_usage = True
+                                text = _public_content(chunk.content)
+                                if text:
+                                    emitted_any = True
+                                    message_id = _stream_message_id(chunk, metadata, run_id)
+                                    if message_id not in started_messages:
+                                        started_messages.add(message_id)
+                                        response_parts.append(text)
+                                        yield _sse("message.started", {"messageId": message_id})
+                                    else:
+                                        response_parts.append(text)
+                                    yield _sse(
+                                        "message.delta",
+                                        {"messageId": message_id, "textDelta": text},
+                                    )
+                        elif mode == "updates":
+                            for tool_message in _tool_messages(payload):
+                                item_id = tool_message.tool_call_id or tool_message.id
+                                if not item_id:
+                                    continue
+                                if tool_message.name == "propose_trading_action":
+                                    envelope = _proposal_envelope(tool_message.content)
+                                    if envelope is None or item_id in emitted_proposals:
+                                        continue
+                                    emitted_proposals.add(item_id)
+                                    yield _sse(
+                                        "proposal.created",
+                                        {
+                                            "proposalId": item_id,
+                                            "envelope": envelope.model_dump(
+                                                mode="json", by_alias=True
+                                            ),
+                                        },
+                                    )
+                                elif tool_message.name == "start_polymarket_backtest":
+                                    backtest = _backtest_reference(tool_message.content)
+                                    if backtest is None or item_id in emitted_backtests:
+                                        continue
+                                    emitted_backtests.add(item_id)
+                                    yield _sse(
+                                        "backtest.created",
+                                        {
+                                            "backtestId": item_id,
+                                            "backtest": backtest.model_dump(
+                                                mode="json", by_alias=True
+                                            ),
+                                        },
+                                    )
                 if await request.is_disconnected():
                     raise asyncio.CancelledError
-                if mode == "messages":
-                    chunk, metadata = payload
-                    if isinstance(chunk, AIMessageChunk):
-                        text = _public_content(chunk.content)
-                        if text:
-                            message_id = _stream_message_id(chunk, metadata, run_id)
-                            if message_id not in started_messages:
-                                started_messages.add(message_id)
-                                yield _sse("message.started", {"messageId": message_id})
-                            yield _sse(
-                                "message.delta",
-                                {"messageId": message_id, "textDelta": text},
-                            )
-                elif mode == "updates":
-                    for tool_message in _tool_messages(payload):
-                        item_id = tool_message.tool_call_id or tool_message.id
-                        if not item_id:
-                            continue
-                        if tool_message.name == "propose_trading_action":
-                            envelope = _proposal_envelope(tool_message.content)
-                            if envelope is None or item_id in emitted_proposals:
-                                continue
-                            emitted_proposals.add(item_id)
-                            yield _sse(
-                                "proposal.created",
-                                {
-                                    "proposalId": item_id,
-                                    "envelope": envelope.model_dump(mode="json", by_alias=True),
-                                },
-                            )
-                        elif tool_message.name == "start_polymarket_backtest":
-                            backtest = _backtest_reference(tool_message.content)
-                            if backtest is None or item_id in emitted_backtests:
-                                continue
-                            emitted_backtests.add(item_id)
-                            yield _sse(
-                                "backtest.created",
-                                {
-                                    "backtestId": item_id,
-                                    "backtest": backtest.model_dump(mode="json", by_alias=True),
-                                },
-                            )
-        if await request.is_disconnected():
-            raise asyncio.CancelledError
-        await services.storage.repository.commit_completed_run(
-            run_id,
-            thread_id,
-            principal.identity,
-        )
-        run_committed = True
-        status_value = "completed"
-        error_code = None
-        yield _sse("run.completed", {"runId": str(run_id)})
+            except (Exception, TimeoutError) as exc:
+                # A Hermes attempt that produced no client-visible output falls
+                # back silently to DeepSeek on the same run; anything already
+                # streamed is a partial answer and must fail normally instead.
+                if (
+                    attempt_index == 0
+                    and runtime == "hermes"
+                    and not emitted_any
+                    and len(attempt_runtimes) > 1
+                    and not isinstance(exc, asyncio.CancelledError)
+                ):
+                    fallback_used = True
+                    runtime = "deepseek"
+                    with suppress(BaseException):
+                        await services.storage.checkpointer.adelete_thread(str(run_id))
+                    logger.warning(
+                        "hermes runtime unavailable run_id=%s error_type=%s",
+                        run_id,
+                        type(exc).__name__,
+                    )
+                    yield _sse(
+                        "runtime.fallback",
+                        {"from": "hermes", "to": "deepseek", "reason": "hermes_unavailable"},
+                    )
+                    continue
+                raise
+            await services.storage.repository.commit_completed_run(
+                run_id,
+                thread_id,
+                principal.identity,
+            )
+            run_committed = True
+            status_value = "completed"
+            error_code = None
+            await _record_attempt_usage(
+                services,
+                principal.identity,
+                run_id,
+                thread_id,
+                runtime,
+                observed_usage,
+                attempt_had_measured_usage,
+                message,
+                "".join(response_parts),
+            )
+            yield _sse("run.completed", {"runId": str(run_id)})
+            break
     except TimeoutError:
         error_code = "run_timeout"
         yield _sse(
@@ -487,10 +647,83 @@ async def _stream_agent_run(
                 await services.storage.checkpointer.adelete_thread(str(run_id))
             with suppress(BaseException):
                 await services.storage.repository.finish_run(run_id, status_value, error_code)
+            # A run that never showed the user anything did not consume its
+            # query slot; a partial stream keeps it (the user saw text).
+            if not emitted_any:
+                with suppress(BaseException):
+                    await refund_query(services.storage.repository, principal.identity)
+        with suppress(BaseException):
+            await record_activity_complete(
+                services.storage.repository,
+                run_id=run_id,
+                status=status_value,
+                error_code=error_code,
+                response_text="".join(response_parts) or None,
+                metadata={
+                    "runtime": runtime,
+                    "requested_runtime": requested_runtime,
+                    "fallback": fallback_used,
+                    "code": error_code,
+                },
+            )
         with suppress(BaseException):
             await lease.release()
         with suppress(BaseException):
             await services.limiter.release()
+
+
+async def _record_attempt_usage(
+    services: AgentServices,
+    principal_id: str,
+    run_id: UUID,
+    thread_id: UUID,
+    runtime: str,
+    observed_usage: dict[str, tuple[str, TokenUsage]],
+    attempt_had_measured_usage: bool,
+    prompt: str,
+    response_text: str,
+) -> None:
+    """Persist one usage row per measured LLM call, or one estimate otherwise.
+
+    Rows from abandoned fallback attempts are kept with status ``failed`` so
+    the record stays honest without counting their cost against the budget.
+    """
+    try:
+        for row_runtime, usage in observed_usage.values():
+            provider = row_runtime
+            model_name = (
+                services.settings.HERMES_API_MODEL if row_runtime == "hermes" else MODEL_ID
+            )
+            await record_llm_usage(
+                services.storage.repository,
+                principal_id=principal_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                runtime=row_runtime,
+                provider=provider,
+                model=model_name,
+                usage=usage,
+                status="completed" if row_runtime == runtime else "failed",
+                settings=services.settings,
+            )
+        if not attempt_had_measured_usage:
+            provider = runtime
+            model_name = (
+                services.settings.HERMES_API_MODEL if runtime == "hermes" else MODEL_ID
+            )
+            await record_llm_usage(
+                services.storage.repository,
+                principal_id=principal_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                runtime=runtime,
+                provider=provider,
+                model=model_name,
+                usage=estimate_usage(prompt, response_text),
+                settings=services.settings,
+            )
+    except Exception as exc:  # noqa: BLE001 - telemetry must not fail the run
+        logger.error("usage recording failed error_type=%s", type(exc).__name__)
 
 
 async def _isolated_run_input(graph: Any, thread_id: UUID, message: str) -> dict[str, Any]:

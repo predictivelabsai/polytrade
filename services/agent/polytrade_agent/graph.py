@@ -27,6 +27,16 @@ register_harness_profile(
     ),
 )
 
+# The Hermes sidecar is consumed as a plain OpenAI-compatible model, so
+# ChatOpenAI reports provider "openai" and resolves through this key.
+register_harness_profile(
+    "openai",
+    HarnessProfile(
+        excluded_tools=HIDDEN_DEEP_AGENT_TOOLS,
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+    ),
+)
+
 def _system_prompt(max_active_backtests: int) -> str:
     return f"""You are PolyTrade, a Polymarket-only research, backtesting, and
 order-drafting agent.

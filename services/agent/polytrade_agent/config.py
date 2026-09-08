@@ -55,6 +55,25 @@ class AgentSettings(BaseSettings):
     CLERK_JWKS_URL: AnyHttpUrl
     CLERK_AUDIENCE: Literal["polytrade"] = "polytrade"
 
+    # Hermes sidecar (OpenAI-compatible endpoint). Leave the key unset to run
+    # DeepSeek-only; the URL alone does not enable the runtime.
+    HERMES_API_URL: AnyHttpUrl | None = None
+    HERMES_API_SERVER_KEY: SecretStr | None = None
+    HERMES_API_MODEL: str = Field(default="hermes-agent", min_length=1, max_length=128)
+    HERMES_API_TIMEOUT_SECONDS: float = Field(default=180, ge=1, le=600)
+    # The LangGraph checkpointer owns conversation memory on this platform; the
+    # sidecar's own session store stays off so threads are not double-tracked.
+    HERMES_PERSIST_SESSIONS: bool = False
+    HERMES_INPUT_USD_PER_MILLION: float = Field(default=2, ge=0)
+    HERMES_OUTPUT_USD_PER_MILLION: float = Field(default=6, ge=0)
+    DEEPSEEK_INPUT_USD_PER_MILLION: float = Field(default=1.25, ge=0)
+    DEEPSEEK_OUTPUT_USD_PER_MILLION: float = Field(default=2.50, ge=0)
+    FREE_PLATFORM_QUERY_LIMIT: int = Field(default=5, ge=0, le=1000)
+    PLATFORM_LLM_DAILY_BUDGET_USD: float = Field(default=5.0, ge=0)
+    # Comma-separated full identities ("clerk:<sub>") allowed to read the
+    # aggregate admin usage summary. Empty disables the endpoint.
+    ADMIN_PRINCIPAL_IDS: str = ""
+
     @field_validator(
         "ASSETHERO_API_ISSUER",
         "ASSETHERO_API_JWKS_URL",
@@ -72,6 +91,10 @@ class AgentSettings(BaseSettings):
         if (self.ASSETHERO_API_ISSUER is None) != (self.ASSETHERO_API_JWKS_URL is None):
             raise ValueError(
                 "ASSETHERO_API_ISSUER and ASSETHERO_API_JWKS_URL must be configured together"
+            )
+        if (self.HERMES_API_URL is None) != (self.HERMES_API_SERVER_KEY is None):
+            raise ValueError(
+                "HERMES_API_URL and HERMES_API_SERVER_KEY must be configured together"
             )
         if self.ASSETHERO_API_ISSUER is not None and (
             str(self.ASSETHERO_API_ISSUER).rstrip("/")
@@ -104,6 +127,18 @@ class AgentSettings(BaseSettings):
                 raise ValueError("CORS_ORIGINS entries cannot contain paths, queries, or fragments")
             origins.append(origin)
         return tuple(dict.fromkeys(origins))
+
+    @property
+    def hermes_configured(self) -> bool:
+        return self.HERMES_API_URL is not None and self.HERMES_API_SERVER_KEY is not None
+
+    @property
+    def admin_principal_ids(self) -> frozenset[str]:
+        return frozenset(
+            identity.strip()
+            for identity in self.ADMIN_PRINCIPAL_IDS.split(",")
+            if identity.strip()
+        )
 
 
 @lru_cache(maxsize=1)

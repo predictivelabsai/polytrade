@@ -22,6 +22,18 @@ x-agent-environment: &agent-environment
   CLERK_ISSUER: ${CLERK_ISSUER:?CLERK_ISSUER is required}
   CLERK_JWKS_URL: ${CLERK_JWKS_URL:?CLERK_JWKS_URL is required}
   CLERK_AUDIENCE: ${CLERK_AUDIENCE:-polytrade}
+  HERMES_API_URL: ${HERMES_API_URL:-http://hermes:8642/v1}
+  HERMES_API_SERVER_KEY: ${HERMES_API_SERVER_KEY:-}
+  HERMES_API_MODEL: ${HERMES_API_MODEL:-hermes-agent}
+  HERMES_API_TIMEOUT_SECONDS: ${HERMES_API_TIMEOUT_SECONDS:-180}
+  HERMES_PERSIST_SESSIONS: ${HERMES_PERSIST_SESSIONS:-false}
+  HERMES_INPUT_USD_PER_MILLION: ${HERMES_INPUT_USD_PER_MILLION:-2}
+  HERMES_OUTPUT_USD_PER_MILLION: ${HERMES_OUTPUT_USD_PER_MILLION:-6}
+  DEEPSEEK_INPUT_USD_PER_MILLION: ${DEEPSEEK_INPUT_USD_PER_MILLION:-1.25}
+  DEEPSEEK_OUTPUT_USD_PER_MILLION: ${DEEPSEEK_OUTPUT_USD_PER_MILLION:-2.50}
+  FREE_PLATFORM_QUERY_LIMIT: ${FREE_PLATFORM_QUERY_LIMIT:-5}
+  PLATFORM_LLM_DAILY_BUDGET_USD: ${PLATFORM_LLM_DAILY_BUDGET_USD:-5}
+  ADMIN_PRINCIPAL_IDS: ${ADMIN_PRINCIPAL_IDS:-}
 
 x-backtest-environment: &backtest-environment
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
@@ -133,6 +145,29 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  hermes:
+    image: nousresearch/hermes-agent:${HERMES_IMAGE_TAG:-v2026.7.7.2}
+    command: ["gateway", "run"]
+    expose:
+      - "8642"
+    environment:
+      - API_SERVER_ENABLED=true
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_PORT=8642
+      - API_SERVER_KEY=${HERMES_API_SERVER_KEY:-}
+      - API_SERVER_MODEL_NAME=${HERMES_API_MODEL:-hermes-agent}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - HERMES_EXEC_ASK=false
+    volumes:
+      - hermes-data:/opt/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8642/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   agent:
     build:
       context: .
@@ -176,3 +211,4 @@ services:
 
 volumes:
   polytrade-redis:
+  hermes-data:

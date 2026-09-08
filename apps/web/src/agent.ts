@@ -5,12 +5,24 @@ import {
 } from "@polytrade/contracts";
 import { z } from "zod";
 
+export type AgentRuntime = "deepseek" | "hermes";
+
+export interface AgentUsageSummary {
+  used: number;
+  limit: number;
+  remaining: number;
+  costUsd: string;
+  platformCostUsd: string;
+  platformBudgetUsd: string;
+}
+
 export interface AgentTurnHandlers {
   onThreadId: (threadId: string) => void;
   onMessageStart: (messageId: string) => void;
   onMessageText: (messageId: string, text: string) => void;
   onProposal: (proposal: TradingActionProposal, expiresAt: string) => void;
   onBacktest?: (backtest: AgentBacktestReference) => void;
+  onNotice?: (notice: { kind: "quota_warning" | "budget_warning" | "runtime_fallback"; message: string }) => void;
 }
 
 export interface AgentThreadMessage {
@@ -133,12 +145,31 @@ const runFailedSchema = z.object({
   code: z.string(),
   message: z.string(),
 });
+const runtimeFallbackSchema = z.object({
+  from: z.literal("hermes"),
+  to: z.literal("deepseek"),
+  reason: z.string(),
+});
+const usageNoticeSchema = z.object({
+  kind: z.enum(["quota_warning", "budget_warning"]),
+  message: z.string(),
+});
+const agentUsageSchema = z.object({
+  fundingSource: z.literal("platform"),
+  used: z.number().int().min(0),
+  limit: z.number().int().min(0),
+  remaining: z.number().int().min(0),
+  costUsd: z.string(),
+  platformCostUsd: z.string(),
+  platformBudgetUsd: z.string(),
+});
 
 export async function runAgentTurn(options: {
   apiUrl: string;
   getToken: () => Promise<string>;
   threadId?: string;
   text: string;
+  runtime?: AgentRuntime;
   handlers: AgentTurnHandlers;
 }): Promise<void> {
   let threadId = options.threadId;
@@ -176,6 +207,22 @@ export async function listAgentThreads(
   const search = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   const response = await agentFetch(apiUrl, `/v1/agent/threads?${search}`, getToken);
   return threadListSchema.parse(await response.json()).items;
+}
+
+export async function getAgentUsage(
+  apiUrl: string,
+  getToken: () => Promise<string>,
+): Promise<AgentUsageSummary> {
+  const response = await agentFetch(apiUrl, "/v1/agent/usage", getToken);
+  const payload = agentUsageSchema.parse(await response.json());
+  return {
+    used: payload.used,
+    limit: payload.limit,
+    remaining: payload.remaining,
+    costUsd: payload.costUsd,
+    platformCostUsd: payload.platformCostUsd,
+    platformBudgetUsd: payload.platformBudgetUsd,
+  };
 }
 
 export async function getAgentThreadItems(
@@ -218,15 +265,19 @@ async function streamRun(options: {
   getToken: () => Promise<string>;
   threadId: string;
   text: string;
+  runtime?: AgentRuntime;
   handlers: AgentTurnHandlers;
 }): Promise<void> {
+  // The run schema forbids unknown fields, so runtime is only sent when set.
+  const body: { message: string; runtime?: AgentRuntime } = { message: options.text };
+  if (options.runtime) body.runtime = options.runtime;
   const response = await agentFetch(
     options.apiUrl,
     `/v1/agent/threads/${encodeURIComponent(options.threadId)}/runs/stream`,
     options.getToken,
     {
       method: "POST",
-      body: JSON.stringify({ message: options.text }),
+      body: JSON.stringify(body),
     },
   );
   if (!response.body) throw new Error("Agent response did not include a stream");
@@ -269,6 +320,19 @@ async function streamRun(options: {
       case "run.completed":
         completed = true;
         break;
+      case "runtime.fallback": {
+        runtimeFallbackSchema.parse(event.data);
+        options.handlers.onNotice?.({
+          kind: "runtime_fallback",
+          message: "Hermes was unavailable, so DeepSeek answered.",
+        });
+        break;
+      }
+      case "usage.notice": {
+        const payload = usageNoticeSchema.parse(event.data);
+        options.handlers.onNotice?.({ kind: payload.kind, message: payload.message });
+        break;
+      }
       case "run.failed": {
         const payload = runFailedSchema.parse(event.data);
         throw new Error(payload.message);

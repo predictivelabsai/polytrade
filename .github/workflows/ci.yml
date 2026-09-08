@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+        env:
+          VITE_API_URL: https://api.polytrade.test
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_polytrade
+      - run: pnpm audit --prod --audit-level high
+
+  agent:
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: test-deepseek-key
+      DATABASE_URL: postgresql://polytrade:polytrade@db.example.test:5432/polytrade?sslmode=require
+      BACKTEST_BASE_URL: http://localhost:8100
+      LANGGRAPH_AES_KEY: 0123456789abcdef0123456789abcdef
+      CORS_ORIGINS: https://polytrade.test,https://assethero.test
+      ASSETHERO_API_ISSUER: https://auth.assethero.test
+      ASSETHERO_API_JWKS_URL: https://auth.assethero.test/.well-known/jwks.json
+      CLERK_ISSUER: https://clerk.test
+      CLERK_JWKS_URL: https://clerk.test/.well-known/jwks.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project services/agent --frozen
+      - run: uv run --project services/agent ruff check services/agent
+      - run: uv run --project services/agent pytest -q services/agent/tests
+      - run: uv run --project services/agent --with pip-audit==2.10.1 pip-audit --local --skip-editable
+
+  backtest:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://polytrade:polytrade@db.example.test:5432/polytrade?sslmode=require
+      REDIS_BROKER_URL: redis://127.0.0.1:6379/0
+      REDIS_RESULT_URL: redis://127.0.0.1:6379/1
+      CORS_ORIGINS: https://polytrade.test,https://assethero.test
+      ASSETHERO_API_ISSUER: https://auth.assethero.test
+      ASSETHERO_API_JWKS_URL: https://auth.assethero.test/.well-known/jwks.json
+      CLERK_ISSUER: https://clerk.test
+      CLERK_JWKS_URL: https://clerk.test/.well-known/jwks.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project services/backtest --frozen
+      - run: uv run --project services/backtest ruff check services/backtest
+      - run: uv run --project services/backtest pytest -q services/backtest/tests
+      - run: uv run --project services/backtest --with pip-audit==2.10.1 pip-audit --local --skip-editable

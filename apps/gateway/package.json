@@ -1,0 +1,40 @@
+{
+  "name": "@polytrade/gateway",
+  "version": "4.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/index.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "bootstrap": "tsx src/bootstrap.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run --testTimeout=15000",
+    "test:bootstrap": "tsx test/bootstrap.integration.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/http-proxy": "^11.6.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/swagger": "^9.5.1",
+    "@fastify/swagger-ui": "^6.1.1",
+    "@polymarket/clob-client-v2": "1.1.0",
+    "@polytrade/contracts": "workspace:*",
+    "decimal.js": "^10.6.0",
+    "fastify": "^5.6.1",
+    "fastify-type-provider-zod": "7.0.0",
+    "jose": "^6.1.0",
+    "pg": "^8.16.3",
+    "viem": "^2.46.3",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "coolify": {
+      "type": "local",
+      "command": ["npx", "-y", "@masonator/coolify-mcp"],
+      "enabled": true,
+      "timeout": 300000,
+      "environment": {
+        "COOLIFY_BASE_URL": "{file:.coolify/base_url}",
+        "COOLIFY_ACCESS_TOKEN": "{file:.coolify/token}"
+      }
+    }
+  }
+}

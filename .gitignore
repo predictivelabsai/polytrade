@@ -136,6 +136,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -205,10 +207,25 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-.env
 
 # Secrets
 .sesskey
+.coolify/
 
 # Test output
 test-results/
+
+# Node / TypeScript
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+apps/web/dist/
+apps/gateway/dist/
+apps/gateway/coverage/
+
+# LangGraph local runtime
+.langgraph_api/
+
+# Generated credentials
+*.pem
+*.key

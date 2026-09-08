@@ -525,7 +525,15 @@ async def test_explicit_agent_interprets_deterministic_command_result(monkeypatc
         content="/hermes poly:weather London", idempotency_key=str(uuid4()))]
 
     completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
-    assert completed.data["message"]["content"] == "Hermes conclusion"
+    final = completed.data["message"]["content"]
+    assert final.startswith("Market probability: 61%")
+    assert "### What Hermes thinks" in final
+    assert final.endswith("Hermes conclusion")
+    deltas = "".join(
+        event.data.get("delta", "") for event in events
+        if event.event == MESSAGE_DELTA
+    )
+    assert deltas.startswith("Market probability: 61%")
     prompt = hermes.calls[0]["messages"][-1].content
     assert "Market probability: 61%" in prompt
     assert "Keep all reported figures unchanged" in prompt

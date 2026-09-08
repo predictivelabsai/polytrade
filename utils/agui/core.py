@@ -95,7 +95,14 @@ class UI:
         # Detect Rich table content — render as <pre> instead of markdown
         has_box = any(c in content for c in "\u2502\u2503\u2500\u2501\u250c\u2510\u2514\u2518\u2513\u251b")
         stripped = content.strip()
-        is_code = stripped.startswith("```")
+        # Treat only a response consisting solely of one fenced block as raw
+        # command output. Prefixed agent runs append commentary after that block
+        # and must be rendered as Markdown so the original table stays a table.
+        is_code = (
+            stripped.startswith("```")
+            and stripped.endswith("```")
+            and stripped.count("```") == 2
+        )
 
         if role != "user" and (has_box or is_code):
             # Extract raw text from code block wrapper

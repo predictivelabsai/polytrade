@@ -721,6 +721,7 @@ class ChatService:
                 "content": help_text, "metadata": route_data}})
             return
 
+        command_output = None
         command = await self._command_router.run(current_content, user_id)
         if command is not None:
             tool_call_id = str(uuid4())
@@ -771,6 +772,7 @@ class ChatService:
             # Explicit agent selection runs the deterministic command first,
             # then asks that agent to interpret the exact same source result.
             source_result = command.content[:12000]
+            command_output = command.content
             current_content = (
                 f"The user ran `{current_content}`. Analyze the PolyTrade result below. "
                 "Keep all reported figures unchanged, distinguish facts from your "
@@ -795,6 +797,11 @@ class ChatService:
         streamed_content = ""
         authoritative_content = ""
         fallback = False
+        if command_output:
+            analysis_heading = f"\n\n### What {route_data['agent']} thinks\n\n"
+            yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id,
+                "thread_id": thread_id, "message_id": assistant_message_id,
+                "delta": command_output + analysis_heading})
         while True:
             agent = get_runtime_agent(
                 selected_runtime, user_id=user_id, thread_id=thread_id,
@@ -851,7 +858,15 @@ class ChatService:
                 yield ChatEvent(AGENT_ROUTE, route_data)
                 continue
 
-        final_content = authoritative_content or streamed_content
+        agent_content = authoritative_content or streamed_content
+        if command_output:
+            final_content = (
+                command_output
+                + f"\n\n### What {route_data['agent']} thinks\n\n"
+                + agent_content
+            )
+        else:
+            final_content = agent_content
         yield ChatEvent(MESSAGE_COMPLETED, {"run_id": run_id,
             "thread_id": thread_id, "message": {"message_id": assistant_message_id,
             "role": "assistant", "content": final_content,

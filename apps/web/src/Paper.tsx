@@ -382,6 +382,11 @@ export function PaperWorkspace(props: {
 
           <PaperPositions portfolio={portfolio} />
           <PaperFills fills={fills} offset={fillOffset} onPage={changeFillPage} />
+          <ShareCard
+            client={props.client}
+            onNotice={props.onNotice}
+            onError={props.onError}
+          />
         </div>
 
         <aside className="paper-ticket-column">
@@ -428,11 +433,6 @@ export function PaperWorkspace(props: {
             )}
             <footer>Price protection uses the preview’s worst consumed level. If the book moves beyond it, the complete order is rejected.</footer>
           </section>
-          <ShareCard
-            client={props.client}
-            onNotice={props.onNotice}
-            onError={props.onError}
-          />
         </aside>
       </div>
     </main>

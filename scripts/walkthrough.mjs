@@ -4,10 +4,12 @@
 // Gateway endpoints are mocked per scenario from the @polytrade/contracts shapes.
 // Prints a per-scenario verdict (assertions + request/console evidence) and saves
 // screenshots to test-results/walkthrough/.
+// Paper scenarios also capture three responsive layouts in shots/paper-bottom-fix/.
 import { chromium } from "playwright-core";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { paperFillsResponseSchema, paperShareStatusSchema, paperStrategySnapshotSchema } from "../packages/contracts/dist/index.js";
 
 const APP_URL = process.env.WALKTHROUGH_APP_URL ?? "http://localhost:5173";
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "test-results", "walkthrough");
@@ -61,6 +63,7 @@ function paperFills(total = 24, offset = 0, limit = 20) {
     items.push({
       fillId: "df0d2b64-6d4e-4e8f-9a1c-" + String(index).padStart(12, "0"),
       kind: index % 3 === 0 ? "SELL" : "BUY",
+      origin: "manual",
       conditionId: "0xcond-a1",
       tokenId: "445400001",
       marketQuestion: "Will Alpha FC win the 2026 league title?",
@@ -81,6 +84,26 @@ function paperFills(total = 24, offset = 0, limit = 20) {
 
 const emptyFills = { items: [], total: 0, offset: 0, limit: 20 };
 const noStrategy = { strategy: null, events: [] };
+const runningStrategy = paperStrategySnapshotSchema.parse({
+  strategy: {
+    strategyId: "77777777-7777-4777-8777-777777777777", conditionId: "0xcond-a1", tokenId: "445400001",
+    marketQuestion: PORTFOLIO.positions[0].marketQuestion, outcome: "YES",
+    entryPrice: "0.790000", exitPrice: "0.840000", sharesPerOrder: "50.000000", maxPosition: "400.000000",
+    intervalSeconds: 15, status: "RUNNING", ordersPlaced: 4, scansCompleted: 96,
+    lastAction: "WAIT", lastMessage: "Quote outside the band — waiting for the next scan.",
+    lastQuoteSide: null, lastQuotePrice: null, lastScannedAt: NOW,
+    nextScanAt: NOW, startedAt: NOW, stoppedAt: null, updatedAt: NOW,
+  },
+  events: [
+    { eventId: "11111111-1111-4111-8111-111111111111", action: "WAIT", message: "Best ask above the entry band. Waiting for the next scan.", side: null, price: null, fillId: null, createdAt: NOW },
+    { eventId: "22222222-2222-4222-8222-222222222222", action: "BUY", message: "Bought 50 YES shares at 0.790.", side: "BUY", price: "0.790000", fillId: paperFills().items[1].fillId, createdAt: NOW },
+    { eventId: "33333333-3333-4333-8333-333333333333", action: "STARTED", message: "Strategy started. Watching YES in the background.", side: null, price: null, fillId: null, createdAt: NOW },
+  ],
+});
+const enabledShare = paperShareStatusSchema.parse({
+  token: "paper_bottom_fix_0123456789abcdef0123456789abc", enabled: true, createdAt: NOW, updatedAt: NOW,
+});
+paperFillsResponseSchema.parse(paperFills());
 const OVERVIEW = {
   walletAddress: WALLET,
   positions: [], openOrders: [], fills: [],
@@ -183,6 +206,43 @@ const base = async (route) => {
   return route.fulfill(json(404, err("NOT_FOUND", "not mocked")));
 };
 
+async function paperLayoutSnapshots(page, t, name) {
+  const outDir = join(dirname(fileURLToPath(import.meta.url)), "..", "shots", "paper-bottom-fix");
+  mkdirSync(outDir, { recursive: true });
+  await page.locator(".share-pill-on").waitFor();
+  await page.evaluate(() => document.fonts.ready);
+  for (const viewport of [{ width: 1460, height: 900 }, { width: 1024, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    const layout = await page.evaluate(() => {
+      const data = document.querySelector(".paper-data-column");
+      const share = document.querySelector(".share-card");
+      const panels = ["market-panel", "ticket", "strategy", "holdings-panel", "fills-panel"].map((name) => document.querySelector(`.paper-${name}`));
+      panels.push(share);
+      const tops = panels.map((panel) => panel.getBoundingClientRect().top);
+      return {
+        scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
+        shareWidth: share.getBoundingClientRect().width,
+        shareLastInData: data.lastElementChild === share && share.previousElementSibling.matches(".paper-fills-panel"),
+        dataDisplay: getComputedStyle(data).display,
+        ticketDisplay: getComputedStyle(document.querySelector(".paper-ticket-column")).display,
+        shareArea: getComputedStyle(share).gridArea,
+        stackedOrder: tops.every((top, index) => index === 0 || top > tops[index - 1]),
+      };
+    });
+    const label = `${name}-${viewport.width}x${viewport.height}`;
+    t.note(`${label}: ${JSON.stringify(layout)}`);
+    t.assert(layout.scrollWidth === layout.clientWidth, `${label}: no horizontal overflow`);
+    t.assert(layout.shareLastInData, `${label}: share follows fills in the data column`);
+    if (viewport.width < 1200) {
+      t.assert(layout.dataDisplay === "contents" && layout.ticketDisplay === "contents" && layout.shareArea.startsWith("share") && layout.stackedOrder,
+        `${label}: named grid areas preserve market/ticket/strategy/holdings/fills/share order`);
+    }
+    await page.screenshot({ path: join(outDir, `${label}.png`), fullPage: true });
+    t.note(`saved shots/paper-bottom-fix/${label}.png`);
+  }
+  await page.setViewportSize({ width: 1460, height: 900 });
+}
+
 const SCENARIOS = {
   "paper-ok": {
     route: async (route) => {
@@ -192,6 +252,7 @@ const SCENARIOS = {
       if (p === "/v1/paper/portfolio") return route.fulfill(json(200, PORTFOLIO));
       if (p === "/v1/paper/fills") return route.fulfill(json(200, paperFills(24, Number(url.searchParams.get("offset") ?? 0))));
       if (p === "/v1/paper/strategy") return route.fulfill(json(200, noStrategy));
+      if (p === "/v1/paper/share") return route.fulfill(json(200, enabledShare));
       return base(route);
     },
     steps: async (page, t) => {
@@ -207,6 +268,21 @@ const SCENARIOS = {
       await page.click("button[aria-label='Previous paper fills']");
       await page.waitForTimeout(500);
       await t.snapshot("paper-ok", "paper dashboard back on page 1");
+      await paperLayoutSnapshots(page, t, "paper-ok");
+    },
+  },
+  "paper-strategy": {
+    route: async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/v1/paper/strategy") return route.fulfill(json(200, runningStrategy));
+      // A short ledger exposes the tall automation rail and the bottom-left gap.
+      if (url.pathname === "/v1/paper/fills") return route.fulfill(json(200, paperFills(4)));
+      return SCENARIOS["paper-ok"].route(route);
+    },
+    steps: async (page, t) => {
+      await page.goto(`${APP_URL}/paper`, { waitUntil: "networkidle" });
+      await page.locator(".paper-strategy-running").waitFor();
+      await paperLayoutSnapshots(page, t, "paper-strategy");
     },
   },
   "paper-error": {
@@ -394,8 +470,8 @@ for (const name of names) {
   const context = await browser.newContext({ viewport: { width: 1460, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   page.on("pageerror", (e) => console.log(`  jserr ${String(e).slice(0, 160)}`));
-  page.on("console", (m) => { if (m.type() === "error") console.log(`  console ${m.text().slice(0, 160)}`); });
-  await context.route("https://api.polytrade.chat/**", scenario.route);
+  page.on("console", (m) => { if (m.type() === "error") console.log(`  console ${m.text().slice(0, 160)} ${m.location().url}`); });
+  await context.route("**/v1/**", scenario.route);
   await context.route("https://polymarket.com/api/geoblock", (r) => r.fulfill(json(200, { blocked: false, verified: true, country: "EE", region: "01" })));
   try {
     await scenario.steps(page, t);

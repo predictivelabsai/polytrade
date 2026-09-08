@@ -91,6 +91,7 @@ services:
     ports:
       - "4002:4002"
     environment:
+      - WEB_RELOAD=false
       - MODEL=${MODEL:-grok-4-fast-reasoning}
       - MODEL_PROVIDER=${MODEL_PROVIDER:-xai}
       - XAI_API_KEY=${XAI_API_KEY:-}

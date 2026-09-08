@@ -1088,6 +1088,7 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.getenv("WEB_PORT", "4002"))
+    reload_flag = os.getenv("WEB_RELOAD", "false").lower() == "true"
     print(f"\n  PolyTrade Web Shell -> http://localhost:{port}")
     print(f"  Model: {os.getenv('MODEL', '?')} via {os.getenv('MODEL_PROVIDER', '?')}")
     print()
@@ -1104,4 +1105,4 @@ if __name__ == "__main__":
     print("    poly:predict London 2  Forward prediction")
     print("    <any question>         Ask the AI agent")
     print()
-    serve(port=port)
+    serve(port=port, reload=reload_flag)

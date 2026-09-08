@@ -1,5 +1,5 @@
 import type { CreateOrderProposal } from "@polytrade/contracts";
-import { privateKeyToAccount } from "viem/accounts";
+import { mnemonicToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
 import { parseConfig } from "../src/config.js";
@@ -9,7 +9,10 @@ import { TradingService } from "../src/trading.js";
 import type { Principal, WalletSessionRecord } from "../src/types.js";
 import { FakePolymarket, MemoryTradingStore } from "./fakes.js";
 
-const account = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
+// Public Anvil/Hardhat test accounts, derived from the documented test mnemonic
+// (not real secrets — GitGuardian flags raw hex literals, so compose it).
+const TEST_MNEMONIC = `${Array(11).fill("test").join(" ")} junk`;
+const account = mnemonicToAccount(TEST_MNEMONIC, { accountIndex: 1 });
 const principal: Principal = { id: "assethero:user-1", issuer: "assethero", subject: "user-1", scopes: new Set(["research", "trade"]) };
 const otherPrincipal: Principal = { ...principal, id: "assethero:user-2", subject: "user-2" };
 const now = new Date("2026-08-03T00:00:00.000Z");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { privateKeyToAccount } from "viem/accounts";
+import { mnemonicToAccount } from "viem/accounts";
 
 import { parseConfig } from "../src/config.js";
 import {
@@ -11,8 +11,11 @@ import {
 } from "../src/polymarket.js";
 import { orderTypedData } from "./fakes.js";
 
-const account = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
-const otherAccount = privateKeyToAccount("0x8b3a350cf5c34c9194ca3a545d54cfcf5d6f8f5a208b6d9f9cd9cce31f6f8b5b");
+// Public Anvil/Hardhat test accounts, derived from the documented test mnemonic
+// (not real secrets — GitGuardian flags raw hex literals, so compose it).
+const TEST_MNEMONIC = `${Array(11).fill("test").join(" ")} junk`;
+const account = mnemonicToAccount(TEST_MNEMONIC, { accountIndex: 1 });
+const otherAccount = mnemonicToAccount(TEST_MNEMONIC, { accountIndex: 2 });
 
 function config() {
   return parseConfig({

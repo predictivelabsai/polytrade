@@ -4900,6 +4900,7 @@ th small {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-bottom: 14px;
 }
 
 .share-pill {
@@ -4923,7 +4924,7 @@ th small {
 }
 
 .share-card-copy {
-  margin: 0;
+  margin: 0 14px;
   color: var(--muted);
   font-size: 0.85rem;
 }
@@ -4932,6 +4933,7 @@ th small {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: 0 14px;
 }
 
 .share-token-row code {
@@ -4952,6 +4954,7 @@ th small {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  margin: 0 14px;
 }
 
 /* A single market can travel between research, paper, and historical replay. */

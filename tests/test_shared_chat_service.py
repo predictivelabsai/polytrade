@@ -527,7 +527,7 @@ async def test_explicit_agent_interprets_deterministic_command_result(monkeypatc
     completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
     final = completed.data["message"]["content"]
     assert final.startswith("Market probability: 61%")
-    assert "### Hermes analysis" in final
+    assert "### Analysis & confidence" in final
     assert final.endswith("Hermes conclusion")
     deltas = "".join(
         event.data.get("delta", "") for event in events

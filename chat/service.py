@@ -801,7 +801,7 @@ class ChatService:
         authoritative_content = ""
         fallback = False
         if command_output:
-            analysis_heading = f"\n\n### {route_data['agent']} analysis\n\n"
+            analysis_heading = "\n\n### Analysis & confidence\n\n"
             yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id,
                 "thread_id": thread_id, "message_id": assistant_message_id,
                 "delta": command_output + analysis_heading})
@@ -865,7 +865,7 @@ class ChatService:
         if command_output:
             final_content = (
                 command_output
-                + f"\n\n### {route_data['agent']} analysis\n\n"
+                + "\n\n### Analysis & confidence\n\n"
                 + agent_content
             )
         else:

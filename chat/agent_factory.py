@@ -152,3 +152,18 @@ def get_chat_agent():
     llm = LLMProvider.get_model(model, provider, temperature=0.5)
     tools = get_chat_tools()
     return create_deep_agent(model=llm, tools=list(tools), system_prompt=SYSTEM_PROMPT)
+
+
+def build_chat_agent(*, api_key: str):
+    """Build an uncached DeepAgent using one user's decrypted xAI key."""
+    from deepagents import create_deep_agent
+    from model.llm import LLMProvider
+
+    provider = (os.getenv("MODEL_PROVIDER") or "openai").lower()
+    if provider != "xai":
+        raise ValueError("User provider keys currently support xAI only")
+    model = os.getenv("MODEL") or "grok-4-fast-reasoning"
+    llm = LLMProvider.get_model(model, provider, temperature=0.5, api_key=api_key)
+    return create_deep_agent(
+        model=llm, tools=list(get_chat_tools()), system_prompt=SYSTEM_PROMPT
+    )

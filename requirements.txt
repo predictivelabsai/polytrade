@@ -37,6 +37,7 @@ psycopg2-binary
 bcrypt
 PyJWT
 authlib
+cryptography
 
 # ── Dev / test ────────────────────────────────────────────────────────────
 pytest

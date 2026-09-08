@@ -243,6 +243,8 @@ async def send_message(
             "invalid_chat_request": 422,
             "persistence_unavailable": 503,
             "run_timeout": 504,
+            "query_limit_exceeded": 429,
+            "daily_budget_exceeded": 429,
         }.get(code, 502)
         raise HTTPException(status_code=status_code, detail=failure)
     if not completed_message or not completed_run:

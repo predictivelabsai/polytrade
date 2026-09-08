@@ -13,6 +13,7 @@ from typing import Dict, Iterable, Optional
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import bcrypt as _bcrypt
+from cryptography.fernet import Fernet
 
 from db.connection import get_pool
 
@@ -51,7 +52,7 @@ async def create_user(
         INSERT INTO polycode.users (email, password_hash, display_name)
         VALUES ($1, $2, $3)
         ON CONFLICT (email) DO NOTHING
-        RETURNING user_id, email, display_name, is_active, created_at
+        RETURNING user_id, email, display_name, is_admin, is_active, created_at
     """, email.lower().strip(), pw_hash, display_name or email.split("@")[0])
     if not row:
         return None
@@ -62,7 +63,7 @@ async def get_user_by_email(email: str) -> Optional[Dict]:
     """Fetch a user by email address."""
     pool = await get_pool()
     row = await pool.fetchrow("""
-        SELECT user_id, email, password_hash, display_name, is_active, created_at
+        SELECT user_id, email, password_hash, display_name, is_admin, is_active, created_at
         FROM polycode.users
         WHERE email = $1 AND is_active = TRUE
     """, email.lower().strip())
@@ -76,7 +77,7 @@ async def get_user_by_id(user_id: str) -> Optional[Dict]:
     pool = await get_pool()
     uid = UUID(str(user_id)) if not isinstance(user_id, UUID) else user_id
     row = await pool.fetchrow("""
-        SELECT user_id, email, password_hash, display_name, is_active, created_at
+        SELECT user_id, email, password_hash, display_name, is_admin, is_active, created_at
         FROM polycode.users
         WHERE user_id = $1 AND is_active = TRUE
     """, uid)
@@ -309,7 +310,62 @@ def session_login(session, user: Dict):
         "user_id": str(user["user_id"]),
         "email": user["email"],
         "display_name": user.get("display_name", ""),
+        "is_admin": bool(user.get("is_admin")),
     }
+
+
+def _credential_cipher() -> Fernet:
+    key = os.getenv("ENCRYPTION_KEY", "").strip()
+    if not key:
+        raise RuntimeError("ENCRYPTION_KEY is required to store provider keys")
+    return Fernet(key.encode())
+
+
+async def store_provider_api_key(user_id: str, provider: str, api_key: str) -> None:
+    """Encrypt one provider key before persistence. Never log the plaintext."""
+    provider = (provider or "").strip().lower()
+    api_key = (api_key or "").strip()
+    if provider != "xai" or not api_key:
+        raise ValueError("A non-empty xAI key is required")
+    hint = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) >= 10 else "configured"
+    encrypted = _credential_cipher().encrypt(api_key.encode())
+    pool = await get_pool()
+    await pool.execute("""
+      INSERT INTO polycode.user_provider_credentials
+        (user_id,provider,api_key_enc,api_key_hint,is_active)
+      VALUES($1,$2,$3,$4,TRUE)
+      ON CONFLICT(user_id,provider) DO UPDATE SET api_key_enc=EXCLUDED.api_key_enc,
+        api_key_hint=EXCLUDED.api_key_hint,is_active=TRUE,updated_at=NOW()
+    """, UUID(user_id), provider, encrypted, hint)
+
+
+async def get_provider_api_key(user_id: str | None, provider: str = "xai") -> Optional[str]:
+    if not user_id:
+        return None
+    pool = await get_pool()
+    value = await pool.fetchval("""
+      SELECT api_key_enc FROM polycode.user_provider_credentials
+      WHERE user_id=$1 AND provider=$2 AND is_active=TRUE
+    """, UUID(user_id), provider.lower())
+    if not value:
+        return None
+    return _credential_cipher().decrypt(bytes(value)).decode()
+
+
+async def get_provider_key_status(user_id: str, provider: str = "xai") -> Dict:
+    pool = await get_pool()
+    hint = await pool.fetchval("""
+      SELECT api_key_hint FROM polycode.user_provider_credentials
+      WHERE user_id=$1 AND provider=$2 AND is_active=TRUE
+    """, UUID(user_id), provider.lower())
+    return {"configured": bool(hint), "hint": hint or ""}
+
+
+async def clear_provider_api_key(user_id: str, provider: str = "xai") -> None:
+    pool = await get_pool()
+    await pool.execute("""
+      DELETE FROM polycode.user_provider_credentials WHERE user_id=$1 AND provider=$2
+    """, UUID(user_id), provider.lower())
 
 
 def create_cross_app_token(user_id: str, email: str) -> str:

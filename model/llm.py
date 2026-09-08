@@ -14,6 +14,7 @@ class LLMProvider:
         model: str = "gpt-4.1-mini",
         provider: str = "openai",
         temperature: float = 0.7,
+        api_key: Optional[str] = None,
     ) -> Any:
         """
         Get an LLM model instance based on provider and model name.
@@ -30,21 +31,21 @@ class LLMProvider:
             return ChatOpenAI(
                 model=model,
                 temperature=temperature,
-                api_key=os.getenv("OPENAI_API_KEY"),
+                api_key=api_key or os.getenv("OPENAI_API_KEY"),
                 streaming=True,
             )
         elif provider == "anthropic":
             return ChatAnthropic(
                 model=model,
                 temperature=temperature,
-                api_key=os.getenv("ANTHROPIC_API_KEY"),
+                api_key=api_key or os.getenv("ANTHROPIC_API_KEY"),
                 streaming=True,
             )
         elif provider == "google":
             return ChatGoogleGenerativeAI(
                 model=model,
                 temperature=temperature,
-                api_key=os.getenv("GOOGLE_API_KEY"),
+                api_key=api_key or os.getenv("GOOGLE_API_KEY"),
                 streaming=True,
             )
         elif provider == "xai":
@@ -52,7 +53,7 @@ class LLMProvider:
             return ChatOpenAI(
                 model=model,
                 base_url="https://api.x.ai/v1",
-                api_key=os.getenv("XAI_API_KEY"),
+                api_key=api_key or os.getenv("XAI_API_KEY"),
                 temperature=temperature,
                 streaming=True,
             )

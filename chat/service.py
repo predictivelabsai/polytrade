@@ -37,6 +37,24 @@ from .runtimes import get_runtime_agent
 logger = logging.getLogger(__name__)
 
 
+async def _safe_start_activity(run_id, user_id, thread_id, content):
+    try:
+        from .activity import start_user_log
+        await start_user_log(run_id, user_id, thread_id, content)
+    except Exception:
+        logger.warning("Could not start user activity log", exc_info=True)
+
+
+async def _safe_finish_activity(run_id, *, response, framework, status="completed",
+                                error=None, metadata=None):
+    try:
+        from .activity import complete_user_log
+        await complete_user_log(run_id, response=response, framework=framework,
+                                status=status, error=error, metadata=metadata)
+    except Exception:
+        logger.warning("Could not complete user activity log", exc_info=True)
+
+
 def _text_content(content: Any) -> str:
     """Normalize text blocks returned by different LangChain providers."""
     if isinstance(content, str):
@@ -343,6 +361,9 @@ class ChatService:
                     yield replay_event
                 return
 
+            if self.repository.persistent:
+                await _safe_start_activity(run_id, user_id, thread_id, content)
+
             yield ChatEvent(
                 RUN_STARTED,
                 {
@@ -427,6 +448,12 @@ class ChatService:
                         run_id, user_id, assistant_id,
                         final_metadata.get("runtime"), final_metadata.get("agent"),
                     )
+                    if self.repository.persistent:
+                        await _safe_finish_activity(
+                            run_id, response=final_content,
+                            framework=final_metadata.get("runtime", route.runtime),
+                            metadata=final_metadata,
+                        )
                 except ChatError:
                     raise
                 except Exception as exc:
@@ -459,12 +486,23 @@ class ChatService:
                     "Client disconnected.",
                     status="cancelled",
                 )
+                if self.repository.persistent:
+                    await _safe_finish_activity(
+                        run_id, response="Client disconnected.", framework=route.runtime,
+                        status="cancelled", error="Client disconnected.",
+                        metadata={"code": "cancelled"},
+                    )
                 raise
             except asyncio.TimeoutError:
                 message = "The research agent timed out."
                 await self._mark_run_failed(
                     run_id, user_id, "run_timeout", message, status="failed"
                 )
+                if self.repository.persistent:
+                    await _safe_finish_activity(
+                        run_id, response=message, framework=route.runtime,
+                        status="failed", error=message, metadata={"code": "run_timeout"},
+                    )
                 yield ChatEvent(
                     RUN_FAILED,
                     {
@@ -479,6 +517,13 @@ class ChatService:
                 await self._mark_run_failed(
                     run_id, user_id, exc.code, str(exc), status="failed"
                 )
+                blocked = exc.code in {"query_limit_exceeded", "daily_budget_exceeded"}
+                if self.repository.persistent:
+                    await _safe_finish_activity(
+                        run_id, response=str(exc), framework=route.runtime,
+                        status="blocked" if blocked else "failed", error=str(exc),
+                        metadata={"code": exc.code},
+                    )
                 yield ChatEvent(
                     RUN_FAILED,
                     {
@@ -497,6 +542,12 @@ class ChatService:
                 await self._mark_run_failed(
                     run_id, user_id, "agent_error", public_message, status="failed"
                 )
+                if self.repository.persistent:
+                    await _safe_finish_activity(
+                        run_id, response=public_message, framework=route.runtime,
+                        status="failed", error=public_message,
+                        metadata={"code": "agent_error"},
+                    )
                 yield ChatEvent(
                     RUN_FAILED,
                     {
@@ -721,6 +772,31 @@ class ChatService:
                 "content": help_text, "metadata": route_data}})
             return
 
+        if current_content.lower() == "/usage":
+            if not user_id:
+                usage_text = "Sign in to view your AI usage."
+            elif not self.repository.persistent:
+                usage_text = (
+                    "# AI usage today\n\nUsage accounting requires PostgreSQL persistence."
+                )
+            else:
+                from utils.auth import get_provider_key_status
+                from .usage import get_usage_status, render_usage_status
+                provider = (os.getenv("MODEL_PROVIDER") or "openai").lower()
+                key_status = await get_provider_key_status(user_id, "xai")
+                status = await get_usage_status(
+                    user_id,
+                    has_byok=bool(key_status["configured"]) and provider == "xai",
+                )
+                usage_text = render_usage_status(status)
+            usage_meta = {**route_data, "runtime": "command", "agent": "Usage"}
+            yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id, "thread_id": thread_id,
+                "message_id": assistant_message_id, "delta": usage_text})
+            yield ChatEvent(MESSAGE_COMPLETED, {"run_id": run_id, "thread_id": thread_id,
+                "message": {"message_id": assistant_message_id, "role": "assistant",
+                "content": usage_text, "metadata": usage_meta}})
+            return
+
         command_output = None
         command = await self._command_router.run(current_content, user_id)
         if command is not None:
@@ -797,6 +873,34 @@ class ChatService:
             elif message.get("role") == "assistant":
                 langchain_messages.append(AIMessage(content=text))
 
+        from .usage import (
+            TokenUsage, allowance_warning, authorize_query, budget_warning,
+            extract_usage, record_usage, refund_query,
+        )
+        provider = (os.getenv("MODEL_PROVIDER") or "openai").lower()
+        model_name = os.getenv("MODEL") or "gpt-4.1-mini"
+        user_api_key = None
+        if (self.repository.persistent and user_id
+                and selected_runtime == "deepagents" and provider == "xai"):
+            from utils.auth import get_provider_api_key
+            user_api_key = await get_provider_api_key(user_id, "xai")
+        authorization = (
+            await authorize_query(
+                user_id, has_byok=bool(user_api_key) and selected_runtime == "deepagents"
+            )
+            if self.repository.persistent else None
+        )
+        measured = TokenUsage()
+
+        def collect_usage(raw: Any) -> None:
+            nonlocal measured
+            found = extract_usage(raw)
+            if found.total_tokens:
+                measured.input_tokens += found.input_tokens
+                measured.output_tokens += found.output_tokens
+                measured.total_tokens += found.total_tokens
+                measured.quality = "measured"
+
         streamed_content = ""
         authoritative_content = ""
         fallback = False
@@ -809,6 +913,7 @@ class ChatService:
             agent = get_runtime_agent(
                 selected_runtime, user_id=user_id, thread_id=thread_id,
                 deepagent_factory=self._agent_factory,
+                api_key=user_api_key if selected_runtime == "deepagents" else None,
             )
             try:
                 raw_events = agent.astream_events(
@@ -820,6 +925,7 @@ class ChatService:
 
                     if kind == "on_chat_model_stream":
                         chunk = data.get("chunk")
+                        collect_usage(chunk)
                         delta = _text_content(getattr(chunk, "content", ""))
                         if delta:
                             streamed_content += delta
@@ -838,6 +944,7 @@ class ChatService:
                             "thread_id": thread_id, "tool_call_id": tool_call_id,
                             "name": raw.get("name") or "tool"})
                     elif kind == "on_chain_end":
+                        collect_usage(data.get("usage"))
                         output = data.get("output")
                         if isinstance(output, dict):
                             output_messages = output.get("messages") or []
@@ -850,6 +957,7 @@ class ChatService:
                 break
             except Exception:
                 if selected_runtime != "hermes" or streamed_content:
+                    await refund_query(user_id, authorization)
                     raise
                 selected_runtime = "deepagents"
                 fallback = True
@@ -862,6 +970,9 @@ class ChatService:
                 continue
 
         agent_content = authoritative_content or streamed_content
+        if not agent_content:
+            await refund_query(user_id, authorization)
+            raise ChatError("The model returned an empty response.")
         if command_output:
             final_content = (
                 command_output
@@ -870,6 +981,30 @@ class ChatService:
             )
         else:
             final_content = agent_content
+        if user_id and authorization is not None:
+            try:
+                await record_usage(
+                    user_id=user_id, thread_id=thread_id, request_id=run_id,
+                    agent=route_data["runtime"],
+                    provider="xai" if route_data["runtime"] == "hermes" else provider,
+                    model=(os.getenv("HERMES_API_MODEL", "hermes-agent")
+                           if route_data["runtime"] == "hermes" else model_name),
+                    funding_source=authorization.funding_source,
+                    prompt=current_content, response=final_content, usage=measured,
+                )
+                warnings = [allowance_warning(authorization),
+                            await budget_warning(authorization.funding_source)]
+                warning_text = "\n\n".join(
+                    f"> **AI usage warning:** {item}" for item in warnings if item
+                )
+                if warning_text:
+                    suffix = "\n\n" + warning_text + " Use `/usage` for details."
+                    final_content += suffix
+                    yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id,
+                        "thread_id": thread_id, "message_id": assistant_message_id,
+                        "delta": suffix})
+            except Exception:
+                logger.warning("Could not persist LLM usage", exc_info=True)
         yield ChatEvent(MESSAGE_COMPLETED, {"run_id": run_id,
             "thread_id": thread_id, "message": {"message_id": assistant_message_id,
             "role": "assistant", "content": final_content,

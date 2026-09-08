@@ -27,6 +27,7 @@ COMMAND_HELP = """# PolyTrade Commands
 
 ## Choose an agent
 
+- `/usage` shows today's allowance and estimated AI cost without calling a model.
 - `/hermes your question` uses Hermes for one message.
 - `/deepagent your question` uses DeepAgents for one message.
 - `/deepagents your question` is a compatibility alias.

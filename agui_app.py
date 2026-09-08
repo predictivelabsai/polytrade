@@ -83,6 +83,9 @@ app, rt = fast_app(
 
 agui = setup_agui(app, chat_service)
 
+from utils.agui.account_ui import register_account_routes
+register_account_routes(app, rt)
+
 
 # ---------------------------------------------------------------------------
 # CSS — 3-pane layout
@@ -567,6 +570,7 @@ body {
 
 _HELP_CATEGORIES = [
     ("Agents", [
+        ("/usage", "View today's query allowance, tokens, and estimated cost"),
         ("/deepagent <question or command>", "Run one question or PolyTrade command with DeepAgents"),
         ("/hermes <question or command>", "Run one question or PolyTrade command with Hermes"),
         ("/hermes help", "Show Hermes usage and examples"),
@@ -749,6 +753,11 @@ def _left_pane(session):
         A("Dashboard", href=dashboard_url, target="_blank", cls="nav-link"),
     ]
     if user:
+        nav_links.append(A("Settings", href="/settings", cls="nav-link"))
+        nav_links.append(A(
+            "Admin Logging" if user.get("is_admin") else "Usage & Logging",
+            href="/admin/logging", cls="nav-link",
+        ))
         nav_links.append(A("Profile", href="/profile", cls="nav-link"))
     nav = Div(*nav_links, cls="sidebar-nav")
     parts.append(nav)

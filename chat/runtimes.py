@@ -46,6 +46,7 @@ class HermesAgent:
         base_url = os.getenv("HERMES_API_URL", "http://hermes:8642/v1").rstrip("/")
         timeout = float(os.getenv("HERMES_API_TIMEOUT_SECONDS", "180"))
         complete = ""
+        usage: dict[str, Any] = {}
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 "POST", f"{base_url}/chat/completions", headers=headers, json=body
@@ -58,6 +59,8 @@ class HermesAgent:
                     if not data or data == "[DONE]":
                         continue
                     chunk = json.loads(data)
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = chunk["usage"]
                     text = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
                     if text:
                         complete += text
@@ -67,7 +70,10 @@ class HermesAgent:
                         }
         yield {
             "event": "on_chain_end",
-            "data": {"output": {"messages": [SimpleNamespace(content=complete)]}},
+            "data": {
+                "output": {"messages": [SimpleNamespace(content=complete)]},
+                "usage": usage,
+            },
         }
 
 
@@ -77,9 +83,13 @@ def get_runtime_agent(
     user_id: str | None,
     thread_id: str,
     deepagent_factory: Callable[[], Any],
+    api_key: str | None = None,
 ) -> Any:
     if runtime == "hermes":
         return HermesAgent(user_id=user_id, thread_id=thread_id)
     if runtime == "deepagents":
+        if api_key:
+            from .agent_factory import build_chat_agent
+            return build_chat_agent(api_key=api_key)
         return deepagent_factory()
     raise ValueError(f"Unsupported agent runtime: {runtime}")

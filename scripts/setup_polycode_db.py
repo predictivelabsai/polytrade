@@ -250,13 +250,23 @@ def main():
     cur = conn.cursor()
     cur.execute(SCHEMA_SQL)
     conn.commit()
+
+    # Apply additive production migrations needed by fresh and existing installs.
+    migration = os.path.join(
+        os.path.dirname(__file__), "..", "db", "migrations", "004_activity_usage.sql"
+    )
+    with open(migration, "r", encoding="utf-8") as migration_file:
+        cur.execute(migration_file.read())
+    conn.commit()
     cur.close()
     conn.close()
 
     print(f"  Schema '{SCHEMA}' ready")
     print(
         f"  Tables: {SCHEMA}.runs, {SCHEMA}.trades, "
-        f"{SCHEMA}.pnl_snapshots, {SCHEMA}.chat_runs"
+        f"{SCHEMA}.pnl_snapshots, {SCHEMA}.chat_runs, "
+        f"{SCHEMA}.user_logging, {SCHEMA}.agent_logging, "
+        f"{SCHEMA}.llm_usage_logging"
     )
     print(f"\n  Done!\n")
 

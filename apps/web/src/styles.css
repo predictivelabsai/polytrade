@@ -1835,8 +1835,15 @@ th small {
   --paper-accent: #60a5fa;
   --paper-accent-strong: #93c5fd;
   --paper-wash: rgba(96, 165, 250, 0.09);
+  overflow-x: clip;
   background:
     linear-gradient(90deg, transparent 0, transparent 72%, rgba(96, 165, 250, 0.018) 72%, rgba(96, 165, 250, 0.018) 100%);
+}
+
+.paper-page > *,
+.paper-grid > *,
+.paper-ticket-column > * {
+  min-width: 0;
 }
 
 .paper-loading {
@@ -2080,7 +2087,7 @@ th small {
 
 .paper-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 14px minmax(320px, var(--paper-side-width, 390px));
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
   gap: 16px;
   align-items: start;
 }
@@ -2093,54 +2100,14 @@ th small {
 }
 
 .paper-ticket-column {
+  min-width: 0;
   display: grid;
   gap: 14px;
   align-content: start;
 }
 
-.paper-grid-resizer {
-  min-height: 100%;
-  display: grid;
-  place-items: center;
-  align-self: stretch;
-  border-radius: 7px;
-  color: var(--faint);
-  cursor: col-resize;
-  touch-action: none;
-}
-
-.paper-grid-resizer::before {
-  width: 1px;
-  height: 100%;
-  grid-area: 1 / 1;
-  background: var(--border-soft);
-  content: "";
-}
-
-.paper-grid-resizer svg {
-  z-index: 1;
-  width: 14px;
-  padding: 4px 0;
-  border-radius: 999px;
-  background: var(--canvas);
-}
-
-.paper-grid-resizer:hover,
-.paper-grid-resizer:focus-visible {
-  color: var(--paper-accent);
-  outline: none;
-}
-
-.paper-grid-resizer:hover::before,
-.paper-grid-resizer:focus-visible::before {
-  width: 2px;
-  background: var(--paper-accent);
-}
-
-body.paper-resizing,
-body.paper-resizing * {
-  cursor: col-resize !important;
-  user-select: none;
+.paper-ticket-column > .paper-ticket {
+  order: -1;
 }
 
 .paper-market-panel,
@@ -4305,6 +4272,32 @@ body.paper-resizing * {
   .result-metric:nth-child(-n + 3) {
     border-bottom: 1px solid var(--border-soft);
   }
+
+  /* A compressed action rail makes both tables and trade controls harder to
+     use. Below a wide desktop, present one explicit workflow instead. */
+  .paper-grid {
+    grid-template-areas:
+      "market"
+      "ticket"
+      "strategy"
+      "holdings"
+      "fills"
+      "share";
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .paper-data-column,
+  .paper-ticket-column {
+    display: contents;
+  }
+
+  .paper-market-panel { grid-area: market; }
+  .paper-holdings-panel { grid-area: holdings; }
+  .paper-fills-panel { grid-area: fills; }
+  .paper-ticket { grid-area: ticket; }
+  .paper-strategy { grid-area: strategy; }
+  .share-card { grid-area: share; }
 }
 
 @media (max-width: 900px) {
@@ -4374,16 +4367,6 @@ body.paper-resizing * {
     padding: 14px 24px;
     border-left: 0;
     border-top: 1px solid rgba(96, 165, 250, 0.16);
-  }
-}
-
-@media (min-width: 768px) and (max-width: 1023px) {
-  .paper-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.82fr);
-  }
-
-  .paper-grid-resizer {
-    display: none;
   }
 }
 
@@ -4675,18 +4658,6 @@ body.paper-resizing * {
   .paper-ticket { grid-area: ticket; }
   .paper-strategy { grid-area: strategy; }
   .share-card { grid-area: share; }
-
-  .paper-grid-resizer {
-    display: none;
-  }
-
-  .paper-market-panel {
-    grid-row: 1;
-  }
-
-  .paper-ticket-column {
-    position: static;
-  }
 
   .paper-strategy-band {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5125,6 +5096,7 @@ body.paper-resizing * {
 }
 
 .template-grid-section {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -5151,11 +5123,12 @@ body.paper-resizing * {
 
 .template-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 14px;
 }
 
 .template-card {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;

@@ -5,7 +5,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  GripVertical,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -43,9 +42,6 @@ export function PaperWorkspace(props: {
   onMarketSelected?: (market: MarketSearchMarket) => void;
   onMarketCleared?: () => void;
 }) {
-  const gridRef = useRef<HTMLDivElement | null>(null);
-  const resizingRef = useRef(false);
-  const [sideWidth, setSideWidth] = useState(() => panelWidth());
   const [portfolio, setPortfolio] = useState<PaperPortfolio | null>(null);
   const [fills, setFills] = useState<PaperFillsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,50 +65,6 @@ export function PaperWorkspace(props: {
   const pollFailedRef = useRef(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const initialMarketRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    window.localStorage.setItem("polytrade.paper.side-width", String(sideWidth));
-  }, [sideWidth]);
-
-  const setPanelWidthFromPointer = useCallback((clientX: number) => {
-    const bounds = gridRef.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const maximum = Math.min(560, Math.max(320, bounds.width * 0.48));
-    setSideWidth(clamp(bounds.right - clientX, 320, maximum));
-  }, []);
-
-  const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.pointerType === "touch") return;
-    resizingRef.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    document.body.classList.add("paper-resizing");
-    setPanelWidthFromPointer(event.clientX);
-  };
-
-  const resize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (resizingRef.current) setPanelWidthFromPointer(event.clientX);
-  };
-
-  const endResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!resizingRef.current) return;
-    resizingRef.current = false;
-    document.body.classList.remove("paper-resizing");
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-  };
-
-  const resizeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const bounds = gridRef.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const maximum = Math.min(560, Math.max(320, bounds.width * 0.48));
-    const next = event.key === "Home" ? 320
-      : event.key === "End" ? maximum
-        : event.key === "ArrowLeft" ? sideWidth + 24
-          : event.key === "ArrowRight" ? sideWidth - 24
-            : null;
-    if (next === null) return;
-    event.preventDefault();
-    setSideWidth(clamp(next, 320, maximum));
-  };
 
   const loadFills = useCallback(async (offset: number) => {
     try {
@@ -401,7 +353,7 @@ export function PaperWorkspace(props: {
 
       {selectedMarket ? <MarketFocus market={selectedMarket} onClear={clearMarket} /> : null}
 
-      <div className="paper-grid" ref={gridRef} style={{ "--paper-side-width": `${sideWidth}px` } as React.CSSProperties}>
+      <div className="paper-grid">
         <div className="paper-data-column">
           <section className="paper-market-panel">
             <header><div><span className="eyebrow paper-eyebrow">Find a contract</span><h2>Active markets</h2></div><Activity aria-hidden="true" /></header>
@@ -429,6 +381,10 @@ export function PaperWorkspace(props: {
           </section>
 
           <PaperPositions portfolio={portfolio} />
+          <PaperFills fills={fills} offset={fillOffset} onPage={changeFillPage} />
+        </div>
+
+        <aside className="paper-ticket-column">
           <PaperStrategyRunner
             client={props.client}
             market={selectedMarket}
@@ -441,25 +397,6 @@ export function PaperWorkspace(props: {
             onError={props.onError}
             onNotice={props.onNotice}
           />
-        </div>
-
-        <div
-          className="paper-grid-resizer"
-          role="separator"
-          aria-label="Resize paper workspace panels"
-          aria-orientation="vertical"
-          aria-valuemin={320}
-          aria-valuemax={560}
-          aria-valuenow={Math.round(sideWidth)}
-          tabIndex={0}
-          onPointerDown={beginResize}
-          onPointerMove={resize}
-          onPointerUp={endResize}
-          onPointerCancel={endResize}
-          onKeyDown={resizeWithKeyboard}
-        ><GripVertical aria-hidden="true" /></div>
-
-        <aside className="paper-ticket-column">
           <section className="paper-ticket">
             <header>
               <div><span className="eyebrow paper-eyebrow">Fill-or-kill simulation</span><h2>Paper ticket</h2></div>
@@ -491,7 +428,6 @@ export function PaperWorkspace(props: {
             )}
             <footer>Price protection uses the preview’s worst consumed level. If the book moves beyond it, the complete order is rejected.</footer>
           </section>
-          <PaperFills fills={fills} offset={fillOffset} onPage={changeFillPage} />
           <ShareCard
             client={props.client}
             onNotice={props.onNotice}
@@ -612,14 +548,4 @@ function formatTime(value: string): string {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-}
-
-function panelWidth(): number {
-  const stored = window.localStorage.getItem("polytrade.paper.side-width");
-  const value = stored === null ? Number.NaN : Number(stored);
-  return Number.isFinite(value) ? clamp(value, 320, 560) : 390;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }

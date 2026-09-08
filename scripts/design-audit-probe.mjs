@@ -1,4 +1,5 @@
-// Find elements wider than the viewport on mobile paper with full mocks.
+// Keep the paper workspace contained across responsive breakpoints. Tables may
+// scroll inside .table-scroll, but no panel may widen the document or overlap.
 import { chromium } from "playwright-core";
 
 const observedAt = "2026-09-02T00:00:00.000Z";
@@ -51,19 +52,54 @@ await page.route("**/v1/**", async (route) => {
   return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
 });
 await page.route("https://polymarket.com/api/geoblock", (route) => route.fulfill(json({ blocked: false, country: "US", region: "NY" })));
-await page.goto("http://localhost:5173/paper", { waitUntil: "networkidle" });
-await page.waitForTimeout(1200);
+const reports = [];
+for (const width of [320, 390, 767, 768, 1024, 1199, 1200, 1440, 1920]) {
+  await page.setViewportSize({ width, height: 844 });
+  await page.goto("http://localhost:5173/paper", { waitUntil: "networkidle" });
+  await page.waitForTimeout(400);
 
-const offenders = await page.evaluate(() => {
-  const vw = document.documentElement.clientWidth;
-  const out = [];
-  for (const el of document.querySelectorAll("*")) {
-    const r = el.getBoundingClientRect();
-    if (r.width > vw + 1 || r.right > vw + 8) {
-      out.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 90)} w=${Math.round(r.width)} right=${Math.round(r.right)}`);
+  const report = await page.evaluate(() => {
+    const selectors = [
+      ".paper-market-panel",
+      ".paper-ticket",
+      ".paper-strategy",
+      ".paper-holdings-panel",
+      ".paper-fills-panel",
+      ".share-card",
+    ];
+    const panels = selectors.flatMap((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return [];
+      const rect = element.getBoundingClientRect();
+      return [{ selector, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }];
+    });
+    const collisions = [];
+    for (let index = 0; index < panels.length; index += 1) {
+      for (let other = index + 1; other < panels.length; other += 1) {
+        const a = panels[index];
+        const b = panels[other];
+        if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 1
+          && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 1) {
+          collisions.push(`${a.selector} × ${b.selector}`);
+        }
+      }
     }
-  }
-  return { vw, scrollWidth: document.documentElement.scrollWidth, out: out.slice(0, 50) };
-});
-console.log(JSON.stringify(offenders, null, 2));
+    const root = document.documentElement;
+    return {
+      viewport: root.clientWidth,
+      scrollWidth: root.scrollWidth,
+      collisions,
+      resizerCount: document.querySelectorAll(".paper-grid-resizer").length,
+    };
+  });
+  reports.push(report);
+}
+
+console.log(JSON.stringify(reports, null, 2));
+const failures = reports.filter((report) => (
+  report.scrollWidth > report.viewport || report.collisions.length || report.resizerCount !== 0
+));
+if (failures.length) {
+  throw new Error(`Paper layout regression:\n${JSON.stringify(failures, null, 2)}`);
+}
 await browser.close();

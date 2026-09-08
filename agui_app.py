@@ -505,16 +505,24 @@ body {
 .conv-section {
   display: flex;
   flex-direction: column;
-  max-height: 35vh;
-  overflow-y: auto;
+  flex: 0 0 clamp(8.5rem, 24vh, 14rem);
+  min-height: 8.5rem;
+  overflow: hidden;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid #1e2a3a;
+}
+
+#conv-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.2rem;
   scrollbar-width: thin;
   scrollbar-color: #2a3040 transparent;
 }
 
-.conv-section::-webkit-scrollbar { width: 5px; }
-.conv-section::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
+#conv-list::-webkit-scrollbar { width: 5px; }
+#conv-list::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }
 
 .conv-item {
   display: block;

@@ -9,6 +9,13 @@ const optionalHttpsUrl = z.preprocess(
   httpsUrl.optional(),
 );
 
+// An unset optional secret is often pasted as a blank line from .env.example;
+// treat that as absent instead of failing validation on its length.
+const optionalSecret = z.preprocess(
+  (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().min(10).optional(),
+);
+
 const internalHttpOrigin = z.string().url().superRefine((value, context) => {
   const parsed = new URL(value);
   if (!new Set(["http:", "https:"]).has(parsed.protocol)) {
@@ -56,7 +63,7 @@ const envSchema = z.object({
   WALLET_SESSION_IDLE_SECONDS: z.coerce.number().int().min(300).max(28_800).default(14_400),
   WALLET_SESSION_MAX_SECONDS: z.coerce.number().int().min(1_800).max(86_400).default(86_400),
   ORDER_INTENT_TTL_SECONDS: z.coerce.number().int().min(30).max(300).default(120),
-  TELEGRAM_BOT_TOKEN: z.string().min(10).optional(),
+  TELEGRAM_BOT_TOKEN: optionalSecret,
   ALERT_SEND_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(5_000),
 });
 

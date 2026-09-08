@@ -1,4 +1,24 @@
 services:
+  hermes:
+    image: nousresearch/hermes-agent:${HERMES_IMAGE_TAG:-v2026.7.7.2}
+    expose:
+      - "8642"
+    environment:
+      - API_SERVER_KEY=${HERMES_API_SERVER_KEY:-}
+      - API_SERVER_MODEL_NAME=${HERMES_API_MODEL:-hermes-agent}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - HERMES_EXEC_ASK=false
+      - HERMES_MAX_ITERATIONS=${HERMES_MAX_ITERATIONS:-20}
+    volumes:
+      - hermes-data:/opt/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8642/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   api:
     build:
       context: .
@@ -41,6 +61,21 @@ services:
       - CHAT_RATE_LIMIT_PER_MINUTE=${CHAT_RATE_LIMIT_PER_MINUTE:-30}
       - AUTH_RATE_LIMIT_PER_MINUTE=${AUTH_RATE_LIMIT_PER_MINUTE:-10}
       - CHAT_SSE_HEARTBEAT_SECONDS=${CHAT_SSE_HEARTBEAT_SECONDS:-15}
+      - AGENT_FRAMEWORK=deepagents
+      - HERMES_API_URL=${HERMES_API_URL:-http://hermes:8642/v1}
+      - HERMES_API_SERVER_KEY=${HERMES_API_SERVER_KEY:-}
+      - HERMES_API_MODEL=${HERMES_API_MODEL:-hermes-agent}
+      - HERMES_API_TIMEOUT_SECONDS=${HERMES_API_TIMEOUT_SECONDS:-180}
+      - HERMES_PERSIST_SESSIONS=${HERMES_PERSIST_SESSIONS:-true}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET:-}
+      - TELEGRAM_USER_MAP=${TELEGRAM_USER_MAP:-{}}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-}
+      - WHATSAPP_APP_SECRET=${WHATSAPP_APP_SECRET:-}
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID:-}
+      - WHATSAPP_GRAPH_VERSION=${WHATSAPP_GRAPH_VERSION:-v23.0}
+      - WHATSAPP_USER_MAP=${WHATSAPP_USER_MAP:-{}}
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:4000/health').raise_for_status()"]
       interval: 30s
@@ -122,3 +157,6 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
+
+volumes:
+  hermes-data:

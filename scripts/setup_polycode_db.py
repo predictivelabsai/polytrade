@@ -69,6 +69,10 @@ ALTER TABLE {SCHEMA}.runs
     ADD COLUMN IF NOT EXISTS principal_id TEXT;
 ALTER TABLE {SCHEMA}.runs
     ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'native';
+ALTER TABLE {SCHEMA}.runs
+    ADD COLUMN IF NOT EXISTS agent_framework VARCHAR(32) NOT NULL DEFAULT 'system';
+ALTER TABLE {SCHEMA}.runs
+    ADD COLUMN IF NOT EXISTS agent_name VARCHAR(80) NOT NULL DEFAULT 'Polytrade';
 
 -- ── trades ──────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.trades (
@@ -95,6 +99,10 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.trades (
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
+ALTER TABLE {SCHEMA}.trades
+    ADD COLUMN IF NOT EXISTS agent_framework VARCHAR(32) NOT NULL DEFAULT 'system';
+ALTER TABLE {SCHEMA}.trades
+    ADD COLUMN IF NOT EXISTS agent_name VARCHAR(80) NOT NULL DEFAULT 'Polytrade';
 
 -- ── pnl_snapshots ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS {SCHEMA}.pnl_snapshots (
@@ -188,6 +196,12 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.chat_runs (
 
 ALTER TABLE {SCHEMA}.chat_runs
     ADD COLUMN IF NOT EXISTS request_fingerprint CHAR(64);
+ALTER TABLE {SCHEMA}.chat_runs
+    ADD COLUMN IF NOT EXISTS agent_framework VARCHAR(32) NOT NULL DEFAULT 'deepagents';
+ALTER TABLE {SCHEMA}.chat_runs
+    ADD COLUMN IF NOT EXISTS agent_name VARCHAR(80) NOT NULL DEFAULT 'DeepAgents';
+ALTER TABLE {SCHEMA}.chat_runs
+    ADD COLUMN IF NOT EXISTS requested_runtime VARCHAR(32);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_chat_run_idempotency
     ON {SCHEMA}.chat_runs(thread_id, idempotency_key);

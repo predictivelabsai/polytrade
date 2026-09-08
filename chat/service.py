@@ -20,6 +20,7 @@ from .errors import (
     ThreadBusy,
 )
 from .events import (
+    AGENT_ROUTE,
     MESSAGE_COMPLETED,
     MESSAGE_DELTA,
     RUN_COMPLETED,
@@ -30,6 +31,8 @@ from .events import (
     ChatEvent,
 )
 from .repository import ChatRepository, get_chat_repository
+from .routing import AgentRoute, route_message
+from .runtimes import get_runtime_agent
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +254,9 @@ class ChatService:
             "started_at",
             "finished_at",
             "message",
+            "agent_framework",
+            "agent_name",
+            "requested_runtime",
         }
         return {key: value for key, value in run.items() if key in public_fields}
 
@@ -267,6 +273,7 @@ class ChatService:
     ) -> AsyncIterator[ChatEvent]:
         """Persist and stream one turn for an owned conversation."""
         content = self.validate_message(content, idempotency_key)
+        route = route_message(content)
         request_fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         lock = self._thread_lock(thread_id)
@@ -300,6 +307,8 @@ class ChatService:
                     request_fingerprint,
                     user_message_id,
                     assistant_id,
+                    route.runtime,
+                    route.requested_runtime,
                 )
             except ChatError:
                 raise
@@ -367,31 +376,40 @@ class ChatService:
                     ) from exc
 
                 final_content = ""
+                final_metadata: Dict[str, Any] = {}
                 tool_calls: List[Dict[str, Any]] = []
                 async with asyncio.timeout(self._run_timeout_seconds):
-                    async for event in self._stream_turn(
+                    from db.attribution import bind_agent, reset_agent
+
+                    attribution_tokens = bind_agent(route.runtime)
+                    try:
+                        turn = self._stream_turn(
                         history=history,
-                        current_content=content,
+                        current_content=route.content,
+                        route=route,
                         user_id=user_id,
                         run_id=run_id,
                         thread_id=thread_id,
                         assistant_message_id=assistant_id,
-                    ):
-                        if event.event == MESSAGE_COMPLETED:
-                            final_content = event.data["message"]["content"]
-                        elif event.event == TOOL_STARTED:
-                            tool_calls.append(
+                        )
+                        async for event in turn:
+                            if event.event == MESSAGE_COMPLETED:
+                                final_content = event.data["message"]["content"]
+                                final_metadata = event.data["message"].get("metadata", {})
+                            elif event.event == TOOL_STARTED:
+                                tool_calls.append(
                                 {
                                     "tool_call_id": event.data["tool_call_id"],
                                     "name": event.data["name"],
                                     "args": event.data.get("args", {}),
                                 }
-                            )
-                        elif event.event == RUN_FAILED:
-                            # _stream_turn normally raises; retain defensive handling.
-                            raise ChatError(event.data.get("message", "Chat run failed."))
-                        else:
-                            yield event
+                                )
+                            elif event.event == RUN_FAILED:
+                                raise ChatError(event.data.get("message", "Chat run failed."))
+                            else:
+                                yield event
+                    finally:
+                        reset_agent(attribution_tokens)
 
                 if not final_content:
                     raise ChatError("The model returned an empty response.")
@@ -403,10 +421,11 @@ class ChatService:
                         "assistant",
                         final_content,
                         assistant_id,
-                        metadata={"run_id": run_id, "tool_calls": tool_calls},
+                        metadata={"run_id": run_id, "tool_calls": tool_calls, **final_metadata},
                     )
                     await self.repository.complete_run(
-                        run_id, user_id, assistant_id
+                        run_id, user_id, assistant_id,
+                        final_metadata.get("runtime"), final_metadata.get("agent"),
                     )
                 except ChatError:
                     raise
@@ -556,6 +575,7 @@ class ChatService:
         if not content:
             raise InvalidChatRequest("Message content cannot be empty.")
 
+        route = route_message(content)
         run_id = str(uuid4())
         thread_id = str(uuid4())
         assistant_id = str(uuid4())
@@ -584,18 +604,25 @@ class ChatService:
         try:
             final = ""
             async with asyncio.timeout(self._run_timeout_seconds):
-                async for event in self._stream_turn(
-                    history=messages,
-                    current_content=content,
-                    user_id=user_id,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    assistant_message_id=assistant_id,
-                ):
-                    if event.event == MESSAGE_COMPLETED:
-                        final = event.data["message"]["content"]
-                    else:
-                        yield event
+                from db.attribution import bind_agent, reset_agent
+
+                tokens = bind_agent(route.runtime)
+                try:
+                    async for event in self._stream_turn(
+                        history=messages,
+                        current_content=route.content,
+                        route=route,
+                        user_id=user_id,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        assistant_message_id=assistant_id,
+                    ):
+                        if event.event == MESSAGE_COMPLETED:
+                            final = event.data["message"]["content"]
+                        else:
+                            yield event
+                finally:
+                    reset_agent(tokens)
             if not final:
                 raise ChatError("The model returned an empty response.")
             message = {
@@ -655,11 +682,36 @@ class ChatService:
         *,
         history: List[Dict[str, Any]],
         current_content: str,
+        route: AgentRoute | None = None,
         user_id: Optional[str],
         run_id: str,
         thread_id: str,
         assistant_message_id: str,
     ) -> AsyncIterator[ChatEvent]:
+        route = route or route_message(current_content)
+        selected_runtime = route.runtime
+        route_data = {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "runtime": selected_runtime,
+            "agent": "Hermes" if selected_runtime == "hermes" else "DeepAgents",
+            "requested_runtime": route.requested_runtime,
+            "fallback": False,
+        }
+        yield ChatEvent(AGENT_ROUTE, route_data)
+
+        if route.requested_runtime and not current_content:
+            help_text = (
+                f"Use `/{'hermes' if selected_runtime == 'hermes' else 'deepagent'} "
+                "<question>`. Unprefixed messages use DeepAgents."
+            )
+            yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id, "thread_id": thread_id,
+                "message_id": assistant_message_id, "delta": help_text})
+            yield ChatEvent(MESSAGE_COMPLETED, {"run_id": run_id, "thread_id": thread_id,
+                "message": {"message_id": assistant_message_id, "role": "assistant",
+                "content": help_text, "metadata": route_data}})
+            return
+
         command = await self._command_router.run(current_content, user_id)
         if command is not None:
             tool_call_id = str(uuid4())
@@ -700,6 +752,7 @@ class ChatService:
                         "message_id": assistant_message_id,
                         "role": "assistant",
                         "content": command.content,
+                        "metadata": route_data,
                     },
                 },
             )
@@ -708,87 +761,81 @@ class ChatService:
         from langchain_core.messages import AIMessage, HumanMessage
 
         langchain_messages = []
-        for message in history:
+        for index, message in enumerate(history):
             text = str(message.get("content") or "").strip()
             if not text:
                 continue
             if message.get("role") == "user":
+                if index == len(history) - 1:
+                    text = current_content
                 langchain_messages.append(HumanMessage(content=text))
             elif message.get("role") == "assistant":
                 langchain_messages.append(AIMessage(content=text))
 
-        agent = self._agent_factory()
         streamed_content = ""
         authoritative_content = ""
-
-        async for raw in agent.astream_events(
-            {"messages": langchain_messages},
-            version="v2",
-        ):
-            kind = raw.get("event", "")
-            data = raw.get("data", {}) or {}
-
-            if kind == "on_chat_model_stream":
-                chunk = data.get("chunk")
-                delta = _text_content(getattr(chunk, "content", ""))
-                if delta:
-                    streamed_content += delta
-                    yield ChatEvent(
-                        MESSAGE_DELTA,
-                        {
-                            "run_id": run_id,
-                            "thread_id": thread_id,
-                            "message_id": assistant_message_id,
-                            "delta": delta,
-                        },
-                    )
-            elif kind == "on_tool_start":
-                tool_call_id = str(raw.get("run_id") or uuid4())
-                yield ChatEvent(
-                    TOOL_STARTED,
-                    {
-                        "run_id": run_id,
-                        "thread_id": thread_id,
-                        "tool_call_id": tool_call_id,
-                        "name": raw.get("name") or "tool",
-                        "args": _redacted_args(data.get("input") or {}),
-                    },
+        fallback = False
+        while True:
+            agent = get_runtime_agent(
+                selected_runtime, user_id=user_id, thread_id=thread_id,
+                deepagent_factory=self._agent_factory,
+            )
+            try:
+                raw_events = agent.astream_events(
+                    {"messages": langchain_messages}, version="v2"
                 )
-            elif kind == "on_tool_end":
-                tool_call_id = str(raw.get("run_id") or "")
-                yield ChatEvent(
-                    TOOL_COMPLETED,
-                    {
-                        "run_id": run_id,
-                        "thread_id": thread_id,
-                        "tool_call_id": tool_call_id,
-                        "name": raw.get("name") or "tool",
-                    },
-                )
-            elif kind == "on_chain_end":
-                output = data.get("output")
-                if isinstance(output, dict):
-                    output_messages = output.get("messages") or []
-                    if output_messages:
-                        candidate = _text_content(
-                            getattr(output_messages[-1], "content", "")
-                        )
-                        if candidate:
-                            authoritative_content = candidate
+                async for raw in raw_events:
+                    kind = raw.get("event", "")
+                    data = raw.get("data", {}) or {}
+
+                    if kind == "on_chat_model_stream":
+                        chunk = data.get("chunk")
+                        delta = _text_content(getattr(chunk, "content", ""))
+                        if delta:
+                            streamed_content += delta
+                            yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id,
+                                "thread_id": thread_id, "message_id": assistant_message_id,
+                                "delta": delta})
+                    elif kind == "on_tool_start":
+                        tool_call_id = str(raw.get("run_id") or uuid4())
+                        yield ChatEvent(TOOL_STARTED, {"run_id": run_id,
+                            "thread_id": thread_id, "tool_call_id": tool_call_id,
+                            "name": raw.get("name") or "tool",
+                            "args": _redacted_args(data.get("input") or {})})
+                    elif kind == "on_tool_end":
+                        tool_call_id = str(raw.get("run_id") or "")
+                        yield ChatEvent(TOOL_COMPLETED, {"run_id": run_id,
+                            "thread_id": thread_id, "tool_call_id": tool_call_id,
+                            "name": raw.get("name") or "tool"})
+                    elif kind == "on_chain_end":
+                        output = data.get("output")
+                        if isinstance(output, dict):
+                            output_messages = output.get("messages") or []
+                            if output_messages:
+                                candidate = _text_content(
+                                    getattr(output_messages[-1], "content", "")
+                                )
+                                if candidate:
+                                    authoritative_content = candidate
+                break
+            except Exception:
+                if selected_runtime != "hermes" or streamed_content:
+                    raise
+                selected_runtime = "deepagents"
+                fallback = True
+                from db.attribution import agent_framework, agent_name
+                agent_framework.set("deepagents")
+                agent_name.set("DeepAgents (Hermes unavailable)")
+                route_data = {**route_data, "runtime": "deepagents",
+                    "agent": "DeepAgents (Hermes unavailable)", "fallback": True}
+                yield ChatEvent(AGENT_ROUTE, route_data)
+                continue
 
         final_content = authoritative_content or streamed_content
-        yield ChatEvent(
-            MESSAGE_COMPLETED,
-            {
-                "run_id": run_id,
-                "thread_id": thread_id,
-                "message": {
-                    "message_id": assistant_message_id,
-                    "role": "assistant",
-                    "content": final_content,
-                },
-            },
-        )
+        yield ChatEvent(MESSAGE_COMPLETED, {"run_id": run_id,
+            "thread_id": thread_id, "message": {"message_id": assistant_message_id,
+            "role": "assistant", "content": final_content,
+            "metadata": {**route_data, "fallback": fallback}}})
 
 
 @lru_cache(maxsize=1)

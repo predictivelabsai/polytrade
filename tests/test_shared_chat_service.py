@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage
 from chat.commands import CommandRouter
 from chat.errors import InvalidChatRequest, ThreadBusy, ThreadNotFound
 from chat.events import (
+    AGENT_ROUTE,
     MESSAGE_COMPLETED,
     MESSAGE_DELTA,
     RUN_COMPLETED,
@@ -399,3 +400,74 @@ async def test_trade_report_queries_are_scoped_to_authenticated_user(monkeypatch
 
     assert get_trades.await_args.kwargs["user_id"] == USER_A
     assert get_summary.await_args.kwargs["user_id"] == USER_A
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "runtime"),
+    [("plain question", "deepagents"), ("/deepagent question", "deepagents"),
+     ("/deepagents question", "deepagents"), ("/hermes question", "hermes")],
+)
+async def test_all_agent_routes_share_chat_service_and_persist_attribution(
+    monkeypatch, content, runtime
+):
+    repository = MemoryChatRepository()
+    agents = {"deepagents": FakeAgent("Deep answer"), "hermes": FakeAgent("Hermes answer")}
+
+    def select(selected, **kwargs):
+        return agents[selected]
+
+    monkeypatch.setattr("chat.service.get_runtime_agent", select)
+    service = ChatService(repository=repository, agent_factory=lambda: agents["deepagents"],
+                          command_router=NoCommands())
+    thread = await service.create_thread(USER_A)
+    events = [event async for event in service.stream_message(
+        user_id=USER_A, thread_id=thread["thread_id"], content=content,
+        idempotency_key=str(uuid4()))]
+
+    route = next(event for event in events if event.event == AGENT_ROUTE)
+    assert route.data["runtime"] == runtime
+    messages = await service.get_messages(USER_A, thread["thread_id"])
+    assert messages[-1]["metadata"]["runtime"] == runtime
+    assert len(agents[runtime].calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_agent_prefix_returns_help_without_model_call():
+    repository = MemoryChatRepository()
+    service = ChatService(repository=repository,
+                          agent_factory=lambda: (_ for _ in ()).throw(AssertionError()),
+                          command_router=NoCommands())
+    thread = await service.create_thread(USER_A)
+    events = [event async for event in service.stream_message(
+        user_id=USER_A, thread_id=thread["thread_id"], content="/hermes",
+        idempotency_key=str(uuid4()))]
+    completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
+    assert "/hermes <question>" in completed.data["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_hermes_early_failure_falls_back_but_partial_failure_does_not(monkeypatch):
+    class FailingHermes:
+        async def astream_events(self, payload, version):
+            raise RuntimeError("offline")
+            yield
+
+    deep = FakeAgent("Fallback answer")
+    monkeypatch.setattr(
+        "chat.service.get_runtime_agent",
+        lambda selected, **kwargs: FailingHermes() if selected == "hermes" else deep,
+    )
+    repository = MemoryChatRepository()
+    service = ChatService(repository=repository, agent_factory=lambda: deep,
+                          command_router=NoCommands())
+    thread = await service.create_thread(USER_A)
+    events = [event async for event in service.stream_message(
+        user_id=USER_A, thread_id=thread["thread_id"], content="/hermes question",
+        idempotency_key=str(uuid4()))]
+    routes = [event.data for event in events if event.event == AGENT_ROUTE]
+    assert routes[-1]["runtime"] == "deepagents"
+    assert routes[-1]["fallback"] is True
+    assert len(deep.calls) == 1
+    from db.attribution import agent_framework
+    assert agent_framework.get() == "unknown"

@@ -16,6 +16,13 @@ SYSTEM_PROMPT = (
 
 COMMAND_HELP = """# PolyTrade Commands
 
+## Choose an agent
+
+- `/hermes your question` uses Hermes for one message.
+- `/deepagent your question` uses DeepAgents for one message.
+- `/deepagents your question` is a compatibility alias.
+- Unprefixed questions use DeepAgents by default.
+
 ## Stock research
 - `load AAPL` — Company profile and quote
 - `fa NVDA` — Financial analysis

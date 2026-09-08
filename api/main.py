@@ -43,6 +43,7 @@ from agent.tools.polymarket_tool import PolymarketClient
 from agent.tools.visual_crossing_client import VisualCrossingClient
 from api.routes.auth import router as auth_router
 from api.routes.chat import router as chat_router
+from api.routes.channels import router as channels_router
 from api.security import (
     Principal,
     require_admin,
@@ -99,6 +100,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(chat_router)
+app.include_router(channels_router)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

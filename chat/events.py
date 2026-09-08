@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 
 RUN_STARTED = "run.started"
+AGENT_ROUTE = "agent.route"
 TOOL_STARTED = "tool.started"
 TOOL_COMPLETED = "tool.completed"
 MESSAGE_DELTA = "message.delta"

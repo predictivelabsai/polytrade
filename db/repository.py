@@ -4,6 +4,8 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from db.connection import get_pool, _record_to_dict
+from db.attribution import agent_framework as current_agent_framework
+from db.attribution import agent_name as current_agent_name
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,6 +18,8 @@ async def create_run(
     provider: str,
     principal_id: Optional[str] = None,
     source: str = "native",
+    agent_framework: Optional[str] = None,
+    agent_name: Optional[str] = None,
 ) -> str:
     """Insert a new agent-run record; return the run_id string."""
     pool = await get_pool()
@@ -23,11 +27,15 @@ async def create_run(
     await pool.execute(
         """
         INSERT INTO polycode.runs(
-            run_id, query, model, provider, status, principal_id, source
+            run_id, query, model, provider, status, agent_framework, agent_name,
+            principal_id, source
         )
-        VALUES ($1, $2, $3, $4, 'running', $5, $6)
+        VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8)
         """,
-        run_id, query, model, provider, principal_id, source,
+        run_id, query, model, provider,
+        agent_framework or current_agent_framework.get(),
+        agent_name or current_agent_name.get(),
+        principal_id, source,
     )
     return run_id
 
@@ -141,10 +149,10 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
             trade_id, run_id, market_id, market_question, trade_side,
             amount, entry_price, shares, status, exit_price, payout, pnl,
             period, city, signal, edge_pct, confidence, trade_type,
-            domain, user_id,
+            domain, user_id, agent_framework, agent_name,
             created_at, updated_at
         ) VALUES (
-            $1,$2,$3,$4,$5, $6,$7,$8,$9,$10,$11,$12, $13,$14,$15,$16,$17,$18, $19,$20, NOW(),NOW()
+            $1,$2,$3,$4,$5, $6,$7,$8,$9,$10,$11,$12, $13,$14,$15,$16,$17,$18, $19,$20,$21,$22, NOW(),NOW()
         )
         ON CONFLICT (trade_id) DO UPDATE SET
             status      = EXCLUDED.status,
@@ -154,6 +162,12 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
             trade_type  = EXCLUDED.trade_type,
             domain      = EXCLUDED.domain,
             user_id     = COALESCE(EXCLUDED.user_id, polycode.trades.user_id),
+            agent_framework = CASE
+                WHEN polycode.trades.agent_framework = 'system'
+                THEN EXCLUDED.agent_framework ELSE polycode.trades.agent_framework END,
+            agent_name = CASE
+                WHEN polycode.trades.agent_framework = 'system'
+                THEN EXCLUDED.agent_name ELSE polycode.trades.agent_name END,
             updated_at  = NOW()
         WHERE polycode.trades.user_id IS NOT DISTINCT FROM EXCLUDED.user_id
         RETURNING trade_id
@@ -178,6 +192,8 @@ async def upsert_trade(trade: Dict[str, Any]) -> Dict:
         trade.get("trade_type", "paper"),
         trade.get("domain", "weather"),
         user_id_val,
+        trade.get("agent_framework") or current_agent_framework.get(),
+        trade.get("agent_name") or current_agent_name.get(),
     )
     if not row:
         raise PermissionError("Trade ID belongs to another user.")

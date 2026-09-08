@@ -4,6 +4,12 @@ Both the existing AG-UI window and external clients use the same backend in
 `chat/service.py`. The HTTP API is stateful: the server owns conversation
 history, model configuration, tools, persistence, and user isolation.
 
+DeepAgents is the default runtime. Prefix one message with `/hermes` to use the
+isolated Hermes sidecar, or with `/deepagent` (`/deepagents` is an alias) to
+explicitly use DeepAgents. Prefixes affect only one message; the next
+unprefixed message returns to DeepAgents. Responses and runs persist the actual
+`agent_framework` and `agent_name` in the `polycode` schema.
+
 ## Setup
 
 1. Configure `JWT_SECRET`, the model/provider keys, and a PostgreSQL URL.
@@ -11,6 +17,7 @@ history, model configuration, tools, persistence, and user isolation.
 
    ```bash
    psql "$POLYCODE_DB_URL" -f db/migrations/001_shared_chat_api.sql
+   psql "$POLYCODE_DB_URL" -f db/migrations/003_agent_attribution.sql
    ```
 
    A fresh installation can instead run:

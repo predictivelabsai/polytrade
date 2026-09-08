@@ -86,6 +86,8 @@ class ChatRepository(Protocol):
         request_fingerprint: str,
         user_message_id: str,
         assistant_message_id: str,
+        agent_framework: str = "deepagents",
+        requested_runtime: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], bool]: ...
 
     async def complete_run(
@@ -93,6 +95,8 @@ class ChatRepository(Protocol):
         run_id: str,
         user_id: Optional[str],
         assistant_message_id: str,
+        agent_framework: Optional[str] = None,
+        agent_name: Optional[str] = None,
     ) -> None: ...
 
     async def fail_run(
@@ -281,6 +285,8 @@ class MemoryChatRepository:
         request_fingerprint: str,
         user_message_id: str,
         assistant_message_id: str,
+        agent_framework: str = "deepagents",
+        requested_runtime: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], bool]:
         async with self._lock:
             self._owned_thread(thread_id, user_id)
@@ -320,6 +326,9 @@ class MemoryChatRepository:
                 "request_fingerprint": request_fingerprint,
                 "user_message_id": str(user_message_id),
                 "assistant_message_id": str(assistant_message_id),
+                "agent_framework": agent_framework,
+                "agent_name": "Hermes" if agent_framework == "hermes" else "DeepAgents",
+                "requested_runtime": requested_runtime,
                 "status": "running",
                 "error_code": None,
                 "error_message": None,
@@ -334,6 +343,8 @@ class MemoryChatRepository:
         run_id: str,
         user_id: Optional[str],
         assistant_message_id: str,
+        agent_framework: Optional[str] = None,
+        agent_name: Optional[str] = None,
     ) -> None:
         async with self._lock:
             row = self._runs.get(str(run_id))
@@ -344,6 +355,10 @@ class MemoryChatRepository:
                 assistant_message_id=str(assistant_message_id),
                 finished_at=_now().isoformat(),
             )
+            if agent_framework:
+                row["agent_framework"] = agent_framework
+            if agent_name:
+                row["agent_name"] = agent_name
 
     async def fail_run(
         self,
@@ -642,6 +657,8 @@ class PostgresChatRepository:
         request_fingerprint: str,
         user_message_id: str,
         assistant_message_id: str,
+        agent_framework: str = "deepagents",
+        requested_runtime: Optional[str] = None,
     ) -> Tuple[Dict[str, Any], bool]:
         pool = await self._pool()
         tid, uid = _uuid(thread_id), _uuid(user_id)
@@ -664,9 +681,10 @@ class PostgresChatRepository:
                 """
                 INSERT INTO polycode.chat_runs(
                     run_id, thread_id, user_id, idempotency_key, request_fingerprint,
-                    user_message_id, assistant_message_id, status
+                    user_message_id, assistant_message_id, status, agent_framework,
+                    agent_name, requested_runtime
                 )
-                VALUES ($1,$2,$3,$4,$5,$6,$7,'running')
+                VALUES ($1,$2,$3,$4,$5,$6,$7,'running',$8,$9,$10)
                 RETURNING *
                 """,
                 uuid4(),
@@ -676,6 +694,9 @@ class PostgresChatRepository:
                 request_fingerprint,
                 _uuid(user_message_id),
                 _uuid(assistant_message_id),
+                agent_framework,
+                "Hermes" if agent_framework == "hermes" else "DeepAgents",
+                requested_runtime,
             )
             return _serialise(row), True
         except asyncpg.UniqueViolationError:
@@ -707,17 +728,21 @@ class PostgresChatRepository:
         run_id: str,
         user_id: Optional[str],
         assistant_message_id: str,
+        agent_framework: Optional[str] = None,
+        agent_name: Optional[str] = None,
     ) -> None:
         pool = await self._pool()
         uid = _uuid(user_id)
-        owner_clause = "user_id=$3" if uid else "user_id IS NULL"
-        params = [_uuid(run_id), _uuid(assistant_message_id)]
+        owner_clause = "user_id=$5" if uid else "user_id IS NULL"
+        params = [_uuid(run_id), _uuid(assistant_message_id), agent_framework, agent_name]
         if uid:
             params.append(uid)
         await pool.execute(
             f"""
             UPDATE polycode.chat_runs
-            SET status='completed', assistant_message_id=$2, finished_at=NOW()
+            SET status='completed', assistant_message_id=$2, finished_at=NOW(),
+                agent_framework=COALESCE($3, agent_framework),
+                agent_name=COALESCE($4, agent_name)
             WHERE run_id=$1 AND {owner_clause}
             """,
             *params,

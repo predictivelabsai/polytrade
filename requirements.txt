@@ -4,6 +4,7 @@ langchain-openai
 langchain-anthropic
 langchain-google-genai
 langgraph
+deepagents>=0.6.12,<0.7
 langchain-core
 pydantic
 python-dotenv

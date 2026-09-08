@@ -142,8 +142,8 @@ def get_chat_tools():
 
 @lru_cache(maxsize=1)
 def get_chat_agent():
-    """Return a process-wide compiled, stateless LangGraph agent."""
-    from langgraph.prebuilt import create_react_agent
+    """Return the process-wide canonical DeepAgents research harness."""
+    from deepagents import create_deep_agent
 
     from model.llm import LLMProvider
 
@@ -151,4 +151,4 @@ def get_chat_agent():
     provider = os.getenv("MODEL_PROVIDER") or "openai"
     llm = LLMProvider.get_model(model, provider, temperature=0.5)
     tools = get_chat_tools()
-    return create_react_agent(model=llm, tools=tools, prompt=SYSTEM_PROMPT)
+    return create_deep_agent(model=llm, tools=list(tools), system_prompt=SYSTEM_PROMPT)

@@ -31,6 +31,7 @@ from agent.types import (
     ToolStartEvent,
 )
 from components.command_processor import CommandProcessor
+from chat.prompts import HERMES_HELP
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,11 @@ def _help_html():
 
     # Column 1: Stock Research
     col1 = Div(
+        *_section("Agents", [
+            ("/deepagent <question>", "Use the default DeepAgents runtime"),
+            ("/hermes <question>", "Use Hermes for one message"),
+            ("/hermes help", "Show Hermes usage and examples"),
+        ]),
         *_section("Stock Research", [
             ("load AAPL", "Company profile & quote"),
             ("fa NVDA", "Financial analysis"),
@@ -346,6 +352,16 @@ def _nav(session=None):
 
 _GUIDE_MD = """
 # PolyTrade User Guide
+
+## Agent Commands
+
+| Command | Description |
+|---------|-------------|
+| `/deepagent <question>` | Use the default DeepAgents runtime for one message |
+| `/hermes <question>` | Use Hermes for one message |
+| `/hermes help` | Show Hermes usage and examples |
+
+Messages without a prefix use DeepAgents by default.
 
 ## Stock Research Commands
 
@@ -455,6 +471,12 @@ async def post(command: str, session):
         return Div(
             P(B(f"> {command}"), cls="cmd-echo"),
             _help_html(),
+            cls="cmd-entry",
+        )
+    if cmd_lower == "/hermes help":
+        return Div(
+            P(B(f"> {command}"), cls="cmd-echo"),
+            Div(HERMES_HELP, cls="marked"),
             cls="cmd-entry",
         )
 

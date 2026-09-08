@@ -540,6 +540,11 @@ body {
 # ---------------------------------------------------------------------------
 
 _HELP_CATEGORIES = [
+    ("Agents", [
+        ("/deepagent <question>", "Use the default DeepAgents runtime"),
+        ("/hermes <question>", "Use Hermes for one message"),
+        ("/hermes help", "Show Hermes usage and examples"),
+    ]),
     ("Stock Research", [
         ("load AAPL", "Company profile & quote"),
         ("fa NVDA", "Financial analysis"),

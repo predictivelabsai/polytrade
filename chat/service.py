@@ -700,11 +700,20 @@ class ChatService:
         }
         yield ChatEvent(AGENT_ROUTE, route_data)
 
-        if route.requested_runtime and not current_content:
-            help_text = (
-                f"Use `/{'hermes' if selected_runtime == 'hermes' else 'deepagent'} "
-                "<question>`. Unprefixed messages use DeepAgents."
-            )
+        hermes_help_requested = (
+            selected_runtime == "hermes"
+            and route.requested_runtime == "hermes"
+            and current_content.lower() in {"help", "h", "?"}
+        )
+        if route.requested_runtime and (not current_content or hermes_help_requested):
+            if hermes_help_requested:
+                from .prompts import HERMES_HELP
+                help_text = HERMES_HELP
+            else:
+                help_text = (
+                    f"Use `/{'hermes' if selected_runtime == 'hermes' else 'deepagent'} "
+                    "<question>`. Unprefixed messages use DeepAgents."
+                )
             yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id, "thread_id": thread_id,
                 "message_id": assistant_message_id, "delta": help_text})
             yield ChatEvent(MESSAGE_COMPLETED, {"run_id": run_id, "thread_id": thread_id,
@@ -734,29 +743,40 @@ class ChatService:
                     "name": f"command:{command.command}",
                 },
             )
-            yield ChatEvent(
-                MESSAGE_DELTA,
-                {
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "message_id": assistant_message_id,
-                    "delta": command.content,
-                },
-            )
-            yield ChatEvent(
-                MESSAGE_COMPLETED,
-                {
-                    "run_id": run_id,
-                    "thread_id": thread_id,
-                    "message": {
+            if not route.requested_runtime:
+                yield ChatEvent(
+                    MESSAGE_DELTA,
+                    {
+                        "run_id": run_id,
+                        "thread_id": thread_id,
                         "message_id": assistant_message_id,
-                        "role": "assistant",
-                        "content": command.content,
-                        "metadata": route_data,
+                        "delta": command.content,
                     },
-                },
+                )
+                yield ChatEvent(
+                    MESSAGE_COMPLETED,
+                    {
+                        "run_id": run_id,
+                        "thread_id": thread_id,
+                        "message": {
+                            "message_id": assistant_message_id,
+                            "role": "assistant",
+                            "content": command.content,
+                            "metadata": route_data,
+                        },
+                    },
+                )
+                return
+
+            # Explicit agent selection runs the deterministic command first,
+            # then asks that agent to interpret the exact same source result.
+            source_result = command.content[:12000]
+            current_content = (
+                f"The user ran `{current_content}`. Analyze the PolyTrade result below. "
+                "Keep all reported figures unchanged, distinguish facts from your "
+                "interpretation, and finish with a concise conclusion.\n\n"
+                f"{source_result}"
             )
-            return
 
         from langchain_core.messages import AIMessage, HumanMessage
 

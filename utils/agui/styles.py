@@ -134,6 +134,24 @@ CHAT_UI_STYLES = """
   color: #94a3b8;
 }
 
+.chat-run-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.72rem;
+}
+
+.chat-agent-badge {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid #065f46;
+  border-radius: 999px;
+  color: #34d399;
+  background: #064e3b40;
+}
+
+.chat-run-time { color: #64748b; }
+
 .chat-streaming::after {
   content: ' ...';
   display: inline;

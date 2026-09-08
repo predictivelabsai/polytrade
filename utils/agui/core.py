@@ -6,6 +6,7 @@ commands, persistence, and authorization live behind ChatService.
 """
 
 from typing import Any, Dict
+import time
 from fasthtml.common import (
     Div, Form, Hidden, Textarea, Button, Span, Script, Style, Pre, NotStr,
 )
@@ -13,6 +14,7 @@ import uuid
 
 from .styles import get_chat_styles
 from chat.events import (
+    AGENT_ROUTE,
     MESSAGE_COMPLETED,
     MESSAGE_DELTA,
     RUN_COMPLETED,
@@ -574,7 +576,7 @@ class AGUIThread:
             Div(
                 Div(
                     Span("", id=content_id),
-                    Span("Working", cls="chat-working-label", id=f"working-{asst_mid}"),
+                    Span("Thinking", cls="chat-working-label", id=f"working-{asst_mid}"),
                     Span("", cls="chat-streaming", id=f"streaming-{asst_mid}"),
                     cls="chat-message-content",
                 ),
@@ -600,6 +602,8 @@ class AGUIThread:
         full_response = ""
         failed = False
         received_delta = False
+        selected_agent = "DeepAgents"
+        started_at = time.monotonic()
         try:
             async for event in self._chat_service.stream_message(
                 user_id=self._user_id,
@@ -609,7 +613,19 @@ class AGUIThread:
                 client_message_id=user_mid,
                 assistant_message_id=asst_mid,
             ):
-                if event.event == MESSAGE_DELTA:
+                if event.event == AGENT_ROUTE:
+                    selected_agent = event.data.get("agent", selected_agent)
+                    fallback_note = " (fallback)" if event.data.get("fallback") else ""
+                    await self.send(Div(
+                        Div(
+                            Span(f"Agent: {selected_agent}{fallback_note}", cls="trace-label"),
+                            cls="trace-entry trace-agent-route",
+                        ),
+                        Script(_open_trace),
+                        id="trace-content",
+                        hx_swap_oob="beforeend",
+                    ))
+                elif event.event == MESSAGE_DELTA:
                     token = event.data.get("delta", "")
                     if token:
                         if not received_delta:
@@ -701,8 +717,17 @@ class AGUIThread:
             failed = True
 
         # Replace streamed text with the authoritative persisted final message.
+        elapsed = time.monotonic() - started_at
         await self.send(Div(
-            Div(full_response, cls="chat-message-content marked", id=content_id),
+            Div(
+                Div(
+                    Span(selected_agent, cls="chat-agent-badge"),
+                    Span(f"{elapsed:.1f}s", cls="chat-run-time"),
+                    cls="chat-run-meta",
+                ),
+                Div(full_response, cls="marked", id=content_id),
+                cls="chat-message-content",
+            ),
             cls="chat-message chat-assistant",
             id=f"message-{asst_mid}",
             hx_swap_oob="outerHTML",

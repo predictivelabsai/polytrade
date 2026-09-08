@@ -14,6 +14,15 @@ SYSTEM_PROMPT = (
 )
 
 
+HERMES_HELP = """# Hermes agent
+
+- `/hermes <question>` — use Hermes for one message.
+- `/hermes poly:weather London` — run a PolyTrade command attributed to Hermes.
+- `/hermes help` — show this help.
+- Messages without an agent prefix use DeepAgents by default.
+"""
+
+
 COMMAND_HELP = """# PolyTrade Commands
 
 ## Choose an agent

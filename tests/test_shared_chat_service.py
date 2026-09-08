@@ -30,6 +30,12 @@ class NoCommands:
         return None
 
 
+class FixedCommand:
+    async def run(self, content, user_id):
+        from chat.commands import CommandResult
+        return CommandResult("Market probability: 61%", "poly:weather")
+
+
 class FakeAgent:
     def __init__(self, answer="Research answer"):
         self.answer = answer
@@ -489,6 +495,40 @@ async def test_empty_agent_prefix_returns_help_without_model_call():
         idempotency_key=str(uuid4()))]
     completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
     assert "/hermes <question>" in completed.data["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_hermes_help_is_local_and_does_not_call_model():
+    repository = MemoryChatRepository()
+    service = ChatService(repository=repository,
+                          agent_factory=lambda: (_ for _ in ()).throw(AssertionError()),
+                          command_router=NoCommands())
+    thread = await service.create_thread(USER_A)
+    events = [event async for event in service.stream_message(
+        user_id=USER_A, thread_id=thread["thread_id"], content="/hermes help",
+        idempotency_key=str(uuid4()))]
+    completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
+    assert "# Hermes agent" in completed.data["message"]["content"]
+    assert "/hermes poly:weather London" in completed.data["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_agent_interprets_deterministic_command_result(monkeypatch):
+    hermes = FakeAgent("Hermes conclusion")
+    monkeypatch.setattr("chat.service.get_runtime_agent", lambda selected, **kwargs: hermes)
+    repository = MemoryChatRepository()
+    service = ChatService(repository=repository, agent_factory=lambda: hermes,
+                          command_router=FixedCommand())
+    thread = await service.create_thread(USER_A)
+    events = [event async for event in service.stream_message(
+        user_id=USER_A, thread_id=thread["thread_id"],
+        content="/hermes poly:weather London", idempotency_key=str(uuid4()))]
+
+    completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
+    assert completed.data["message"]["content"] == "Hermes conclusion"
+    prompt = hermes.calls[0]["messages"][-1].content
+    assert "Market probability: 61%" in prompt
+    assert "Keep all reported figures unchanged" in prompt
 
 
 @pytest.mark.asyncio

@@ -527,7 +527,7 @@ async def test_explicit_agent_interprets_deterministic_command_result(monkeypatc
     completed = next(event for event in events if event.event == MESSAGE_COMPLETED)
     final = completed.data["message"]["content"]
     assert final.startswith("Market probability: 61%")
-    assert "### What Hermes thinks" in final
+    assert "### Hermes analysis" in final
     assert final.endswith("Hermes conclusion")
     deltas = "".join(
         event.data.get("delta", "") for event in events
@@ -536,7 +536,9 @@ async def test_explicit_agent_interprets_deterministic_command_result(monkeypatc
     assert deltas.startswith("Market probability: 61%")
     prompt = hermes.calls[0]["messages"][-1].content
     assert "Market probability: 61%" in prompt
-    assert "Keep all reported figures unchanged" in prompt
+    assert "Keep every reported figure unchanged" in prompt
+    assert "Risks and limitations" in prompt
+    assert "Confidence (Low, Medium" in prompt
 
 
 @pytest.mark.asyncio

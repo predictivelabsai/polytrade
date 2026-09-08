@@ -775,8 +775,11 @@ class ChatService:
             command_output = command.content
             current_content = (
                 f"The user ran `{current_content}`. Analyze the PolyTrade result below. "
-                "Keep all reported figures unchanged, distinguish facts from your "
-                "interpretation, and finish with a concise conclusion.\n\n"
+                "Keep every reported figure unchanged and base the response only on "
+                "the supplied evidence. Use four concise sections: Key findings, "
+                "Interpretation, Risks and limitations, and Confidence (Low, Medium, "
+                "or High, with a short reason). Do not claim personal experience or "
+                "certainty that the data does not support.\n\n"
                 f"{source_result}"
             )
 
@@ -798,7 +801,7 @@ class ChatService:
         authoritative_content = ""
         fallback = False
         if command_output:
-            analysis_heading = f"\n\n### What {route_data['agent']} thinks\n\n"
+            analysis_heading = f"\n\n### {route_data['agent']} analysis\n\n"
             yield ChatEvent(MESSAGE_DELTA, {"run_id": run_id,
                 "thread_id": thread_id, "message_id": assistant_message_id,
                 "delta": command_output + analysis_heading})
@@ -862,7 +865,7 @@ class ChatService:
         if command_output:
             final_content = (
                 command_output
-                + f"\n\n### What {route_data['agent']} thinks\n\n"
+                + f"\n\n### {route_data['agent']} analysis\n\n"
                 + agent_content
             )
         else:

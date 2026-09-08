@@ -185,6 +185,24 @@ body {
   border-bottom: 1px solid #1e2a3a;
 }
 
+.agent-help-note {
+  margin: 0.2rem 0.35rem 0.45rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid #065f46;
+  border-radius: 0.4rem;
+  background: #064e3b26;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.agent-help-note strong {
+  display: block;
+  margin-bottom: 0.15rem;
+  color: #34d399;
+  font-size: 0.72rem;
+}
+
 .help-toggle {
   display: flex;
   align-items: center;
@@ -541,8 +559,8 @@ body {
 
 _HELP_CATEGORIES = [
     ("Agents", [
-        ("/deepagent <question>", "Use the default DeepAgents runtime"),
-        ("/hermes <question>", "Use Hermes for one message"),
+        ("/deepagent <question or command>", "Run one question or PolyTrade command with DeepAgents"),
+        ("/hermes <question or command>", "Run one question or PolyTrade command with Hermes"),
         ("/hermes help", "Show Hermes usage and examples"),
     ]),
     ("Stock Research", [
@@ -558,12 +576,16 @@ _HELP_CATEGORIES = [
     ]),
     ("Weather Markets", [
         ("poly:weather London", "Search London markets + token IDs"),
+        ("/deepagent poly:weather London", "Same market data + DeepAgents analysis"),
+        ("/hermes poly:weather London", "Same market data + Hermes analysis"),
         ("poly:weather Seoul", "Seoul weather markets"),
         ("poly:weather New York", "New York weather markets"),
         ("scan", "Scan all weather opportunities"),
     ]),
     ("Backtest & Predict", [
         ("poly:backtest London 7", "7-day London backtest"),
+        ("/deepagent poly:backtest London 7", "Same backtest + DeepAgents conclusion"),
+        ("/hermes poly:backtest London 7", "Same backtest + Hermes conclusion"),
         ("poly:backtestv2 Seoul 7", "Cross-sectional YES/NO backtest"),
         ("poly:predict London 2", "Forward-looking prediction"),
     ]),
@@ -586,14 +608,24 @@ _HELP_CATEGORIES = [
 
 def _help_expanders():
     """Build collapsible help category groups for the sidebar."""
-    groups = []
+    groups = [
+        Div(
+            Strong("Compare agents"),
+            Span(
+                " Add /deepagent or /hermes before any command. Both use the "
+                "same raw data; each agent adds its own analysis below the result."
+            ),
+            cls="agent-help-note",
+        )
+    ]
     for cat_name, items in _HELP_CATEGORIES:
         cat_id = f"help-{cat_name.lower().replace(' ', '-').replace('&', '')}"
+        initially_open = cat_name == "Agents"
         toggle_btn = Button(
             cat_name,
             Span(f"{len(items)}", cls="help-cnt"),
             Span(">", cls="help-arrow"),
-            cls="help-toggle",
+            cls="help-toggle open" if initially_open else "help-toggle",
             onclick=f"toggleGroup('{cat_id}')",
         )
         tool_items = []
@@ -606,7 +638,11 @@ def _help_expanders():
                     title=desc,
                 )
             )
-        tool_list = Div(*tool_items, cls="help-list", id=cat_id)
+        tool_list = Div(
+            *tool_items,
+            cls="help-list open" if initially_open else "help-list",
+            id=cat_id,
+        )
         groups.append(toggle_btn)
         groups.append(tool_list)
 

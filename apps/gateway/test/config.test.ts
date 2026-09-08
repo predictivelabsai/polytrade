@@ -69,3 +69,15 @@ describe("gateway upstream proxy configuration", () => {
     }))).toThrow(/at least 20000/);
   });
 });
+
+describe("optional secret configuration", () => {
+  it("treats a blank TELEGRAM_BOT_TOKEN from a copied .env.example as unset", () => {
+    const config = parseConfig(environment({ TELEGRAM_BOT_TOKEN: "" }));
+
+    expect(config.TELEGRAM_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("still rejects a placeholder token that is too short to be real", () => {
+    expect(() => parseConfig(environment({ TELEGRAM_BOT_TOKEN: "123" }))).toThrow();
+  });
+});

@@ -52,8 +52,8 @@ try {
   assert.ok(row?.database_name, "current_database() was empty");
   assert.deepEqual(row, {
     database_name: row.database_name,
-    gateway_tables: "12",
-    agent_tables: "6",
+    gateway_tables: "16",
+    agent_tables: "10",
     backtest_tables: "8",
     public_tables: "0",
     owned_schemas: "3",

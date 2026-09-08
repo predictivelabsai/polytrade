@@ -2,6 +2,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, convert_to_messages
 from langchain_deepseek import ChatDeepSeek
+from langchain_openai import ChatOpenAI
 
 from .config import AgentSettings
 
@@ -52,6 +53,27 @@ def build_model(settings: AgentSettings) -> DeepSeekThinkingChat:
     )
     assert_model_configuration(model)
     return model
+
+
+def build_hermes_model(settings: AgentSettings) -> ChatOpenAI:
+    """Build the Hermes sidecar as a plain OpenAI-compatible chat model.
+
+    The sidecar speaks the OpenAI wire protocol, so no adapter subclass is
+    needed — the deepagents harness drives it like any other chat model.
+    Failures are handled by falling back to DeepSeek, not by retrying, so the
+    retry budget stays at one.
+    """
+    if not settings.hermes_configured:
+        raise RuntimeError("Hermes runtime is not configured")
+    return ChatOpenAI(
+        model=settings.HERMES_API_MODEL,
+        api_key=settings.HERMES_API_SERVER_KEY.get_secret_value(),
+        base_url=str(settings.HERMES_API_URL).rstrip("/"),
+        streaming=True,
+        stream_usage=True,
+        timeout=settings.HERMES_API_TIMEOUT_SECONDS,
+        max_retries=1,
+    )
 
 
 def assert_model_configuration(model: DeepSeekThinkingChat) -> None:

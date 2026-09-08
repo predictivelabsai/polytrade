@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
     currentWalletSession: vi.fn(),
     deleteAgentThread: vi.fn(),
     getAgentThreadItems: vi.fn(),
+    getAgentUsage: vi.fn(),
     listAgentThreads: vi.fn(),
     listAlertChannels: vi.fn(),
     listAlertDeliveries: vi.fn(),
@@ -80,6 +81,7 @@ vi.mock("./agent", async (importOriginal) => {
     createAgentThread: mocks.createAgentThread,
     deleteAgentThread: mocks.deleteAgentThread,
     getAgentThreadItems: mocks.getAgentThreadItems,
+    getAgentUsage: mocks.getAgentUsage,
     listAgentThreads: mocks.listAgentThreads,
     runAgentTurn: mocks.runAgentTurn,
   };
@@ -333,6 +335,14 @@ beforeEach(() => {
   }]));
   mocks.createAgentThread.mockResolvedValue(THREAD_A);
   mocks.deleteAgentThread.mockResolvedValue(undefined);
+  mocks.getAgentUsage.mockResolvedValue({
+    used: 2,
+    limit: 5,
+    remaining: 3,
+    costUsd: "0.012345",
+    platformCostUsd: "0.012345",
+    platformBudgetUsd: "5",
+  });
   mocks.browserEligibility.mockResolvedValue({ blocked: false, verified: true, country: "US", region: "NY", checkedAt: new Date().toISOString() });
   mocks.currentWalletSession.mockRejectedValue(new mocks.GatewayError("No active wallet session", "NOT_FOUND", 404));
   mocks.accountOverview.mockResolvedValue(overview);
@@ -1016,5 +1026,48 @@ describe("routed workspace", () => {
     failLedger = false;
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("No wallet, signature, real order, or withdrawable balance.")).toBeInTheDocument();
+  });
+
+  it("shows the daily query usage and submits with the picked runtime", async () => {
+    const user = userEvent.setup();
+    mocks.runAgentTurn.mockImplementationOnce(async (options: Parameters<typeof import("./agent").runAgentTurn>[0]) => {
+      options.handlers.onMessageStart("assistant-stream");
+      options.handlers.onMessageText("assistant-stream", "Streamed answer");
+      options.handlers.onNotice?.({
+        kind: "runtime_fallback",
+        message: "Hermes was unavailable, so DeepSeek answered.",
+      });
+    });
+    renderRoute(`/chat/${THREAD_A}`);
+    expect(await screen.findByText("Election answer")).toBeInTheDocument();
+    expect(await screen.findByText("2 / 5 queries used today")).toBeInTheDocument();
+
+    const picker = screen.getByRole("group", { name: "Agent runtime" });
+    expect(picker.querySelector('[aria-pressed="true"]')).toHaveTextContent("DeepSeek");
+
+    await user.click(within(picker).getByRole("button", { name: "Hermes" }));
+    await user.type(screen.getByRole("textbox", { name: "Ask PolyTrade" }), "Ask Hermes this time");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() =>
+      expect(mocks.runAgentTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Ask Hermes this time", runtime: "hermes" }),
+      ),
+    );
+    expect(screen.getByText("Hermes was unavailable, so DeepSeek answered.")).toBeInTheDocument();
+  });
+
+  it("surfaces a 429 quota rejection as a composer error", async () => {
+    const user = userEvent.setup();
+    mocks.runAgentTurn.mockRejectedValueOnce(
+      new mocks.GatewayError("You have used today's 5 platform-funded AI queries. Try again tomorrow.", "UPSTREAM", 429),
+    );
+    renderRoute(`/chat/${THREAD_A}`);
+    expect(await screen.findByText("Election answer")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox", { name: "Ask PolyTrade" }), "One query too many");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/used today's 5 platform-funded AI queries/i)).toBeInTheDocument();
   });
 });

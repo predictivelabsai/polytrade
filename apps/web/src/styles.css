@@ -914,9 +914,55 @@ textarea::placeholder {
   gap: 8px;
 }
 
-.composer-footer > span {
+.composer-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.composer-meta > span {
   color: var(--faint);
   font: 0.58rem var(--mono);
+}
+
+.runtime-picker {
+  display: inline-flex;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.runtime-option {
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--faint);
+  font: 0.58rem var(--mono);
+  cursor: pointer;
+}
+
+.runtime-option + .runtime-option {
+  border-left: 1px solid var(--border-soft);
+}
+
+.runtime-option[aria-pressed="true"] {
+  background: var(--raised-2);
+  color: var(--text);
+}
+
+.runtime-option:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.usage-line {
+  color: var(--faint);
+  font: 0.58rem var(--mono);
+  white-space: nowrap;
 }
 
 .send-button {
@@ -4501,7 +4547,7 @@ th small {
     margin-bottom: 10px;
   }
 
-  .composer-footer > span {
+  .composer-meta > span {
     display: none;
   }
 

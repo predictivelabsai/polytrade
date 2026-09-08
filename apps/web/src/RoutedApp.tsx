@@ -80,10 +80,13 @@ import {
   createAgentThread,
   deleteAgentThread,
   getAgentThreadItems,
+  getAgentUsage,
   listAgentThreads,
   runAgentTurn,
   type AgentBacktestReference,
+  type AgentRuntime,
   type AgentThreadSummary,
+  type AgentUsageSummary,
 } from "./agent";
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
@@ -153,7 +156,11 @@ interface WorkspaceContextValue {
   setReviewed: (threadId: string, value: boolean) => void;
   setSignatureType: (value: 0 | 1 | 2 | 3) => void;
   signatureType: 0 | 1 | 2 | 3;
-  submitMessage: (threadId: string | undefined, text: string) => Promise<boolean>;
+  runtime: AgentRuntime;
+  setRuntime: (value: AgentRuntime) => void;
+  usage: AgentUsageSummary | null;
+  refreshUsage: () => Promise<void>;
+  submitMessage: (threadId: string | undefined, text: string, runtime?: AgentRuntime) => Promise<boolean>;
   threads: AgentThreadSummary[];
   threadsLoaded: boolean;
   tradeAllowed: boolean;
@@ -249,6 +256,8 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<AgentRuntime>("deepseek");
+  const [usage, setUsage] = useState<AgentUsageSummary | null>(null);
   const locationRef = useRef(location.pathname);
   const loadedThreadsRef = useRef(new Set<string>());
   const loadingThreadsRef = useRef(new Set<string>());
@@ -288,6 +297,14 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   const refreshEligibility = useCallback(async () => {
     setEligibility(await checkBrowserEligibility());
   }, []);
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      setUsage(await getAgentUsage(env.VITE_API_URL, authentication.getToken));
+    } catch {
+      // Usage display is a convenience; a failure just leaves the last value.
+    }
+  }, [authentication.getToken]);
 
   // The gateway expires an idle wallet session server-side; detect that once
   // and say so, instead of silently dropping the session on a 404.
@@ -338,6 +355,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshThreads();
     void refreshEligibility();
+    void refreshUsage();
     let cancelled = false;
     void gateway.currentWalletSession()
       .then(async (restored) => {
@@ -364,7 +382,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [gateway, refreshEligibility, refreshThreads, setMessage, handleMissingSession]);
+  }, [gateway, refreshEligibility, refreshThreads, refreshUsage, setMessage, handleMissingSession]);
 
   useEffect(() => {
     if (!session) return;
@@ -444,7 +462,11 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [authentication.getToken, navigate, refreshThreads, setMessage]);
 
-  const submitMessage = useCallback(async (requestedThreadId: string | undefined, text: string): Promise<boolean> => {
+  const submitMessage = useCallback(async (
+    requestedThreadId: string | undefined,
+    text: string,
+    requestedRuntime?: AgentRuntime,
+  ): Promise<boolean> => {
     const message = text.trim();
     if (!message || activeStreamThreadId) return false;
     setError(null);
@@ -492,6 +514,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
         getToken: authentication.getToken,
         threadId: targetThreadId,
         text: message,
+        runtime: requestedRuntime,
         handlers: {
           onThreadId: (replacement) => {
             if (replacement === targetThreadId) return;
@@ -555,6 +578,9 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
             });
             setMessage("Backtest queued. Progress is available in activity and Backtests.", "notice");
           },
+          onNotice: (streamNotice) => {
+            setMessage(streamNotice.message, "notice");
+          },
         },
       });
       return true;
@@ -568,8 +594,9 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
       setActiveStreamThreadId(null);
       setActiveStreamHasText(false);
       await refreshThreads();
+      await refreshUsage();
     }
-  }, [activeStreamThreadId, authentication.getToken, navigate, refreshThreads, setMessage]);
+  }, [activeStreamThreadId, authentication.getToken, navigate, refreshThreads, refreshUsage, setMessage]);
 
   const deleteThread = useCallback(async (threadId: string) => {
     if (activeStreamThreadId === threadId) {
@@ -759,11 +786,14 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     refreshAccount,
     refreshEligibility,
     refreshThreads,
+    refreshUsage,
     reviewed,
+    runtime,
     session,
     setFunderAddress,
     setMessage,
     setReviewed: (threadId, value) => setReviewedState((current) => ({ ...current, [threadId]: value })),
+    setRuntime,
     setSignatureType,
     signatureType,
     submitMessage,
@@ -772,12 +802,13 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
     tradeAllowed: eligibilityAllowsTrading(eligibility),
     updateProposal,
     cancelOpenOrder,
+    usage,
   }), [
     account, activeStreamHasText, activeStreamThreadId, authentication.accountControl, attachLocalSigner, backtests, busy,
     cancelOpenOrder, chatStates, clearProposal, connectAndVerify, deleteThread, disconnectWallet,
     eligibility, error, executeProposal, funderAddress, gateway, lastProposalThreadId, loadThread,
-    localWallet, notice, pendingOrders, refreshAccount, refreshEligibility, refreshThreads, reviewed,
-    session, setMessage, signatureType, submitMessage, threads, threadsLoaded, updateProposal,
+    localWallet, notice, pendingOrders, refreshAccount, refreshEligibility, refreshThreads, refreshUsage, reviewed,
+    runtime, session, setMessage, signatureType, submitMessage, threads, threadsLoaded, updateProposal, usage,
   ]);
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
@@ -921,7 +952,7 @@ function ChatPage({ threadId }: { threadId?: string }) {
     const text = question.trim();
     if (!text || workspace.activeStreamThreadId) return;
     setQuestion("");
-    void workspace.submitMessage(threadId, text).then((accepted) => {
+    void workspace.submitMessage(threadId, text, workspace.runtime).then((accepted) => {
       // A message that never reached any thread (thread creation failed) gives
       // the user their text back instead of silently discarding it.
       if (!accepted) setQuestion((current) => current || text);
@@ -1019,7 +1050,34 @@ function ChatPage({ threadId }: { threadId?: string }) {
             disabled={Boolean(workspace.activeStreamThreadId)}
           />
           <div className="composer-footer">
-            <span>{workspace.activeStreamThreadId && workspace.activeStreamThreadId !== threadId ? "Another chat is responding" : "Shift + Enter for a new line"}</span>
+            <div className="composer-meta">
+              <div className="runtime-picker" role="group" aria-label="Agent runtime">
+                <button
+                  className="runtime-option"
+                  type="button"
+                  aria-pressed={workspace.runtime === "deepseek"}
+                  disabled={Boolean(workspace.activeStreamThreadId)}
+                  onClick={() => workspace.setRuntime("deepseek")}
+                >
+                  DeepSeek
+                </button>
+                <button
+                  className="runtime-option"
+                  type="button"
+                  aria-pressed={workspace.runtime === "hermes"}
+                  disabled={Boolean(workspace.activeStreamThreadId)}
+                  onClick={() => workspace.setRuntime("hermes")}
+                >
+                  Hermes
+                </button>
+              </div>
+              {workspace.usage && (
+                <span className="usage-line">
+                  {workspace.usage.used} / {workspace.usage.limit} queries used today
+                </span>
+              )}
+              <span>{workspace.activeStreamThreadId && workspace.activeStreamThreadId !== threadId ? "Another chat is responding" : "Shift + Enter for a new line"}</span>
+            </div>
             <button className="send-button" type="submit" disabled={!question.trim() || Boolean(workspace.activeStreamThreadId)}>
               <Send aria-hidden="true" /><span>Send</span>
             </button>

@@ -3,7 +3,11 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import ValidationError
 
 from polytrade_agent.config import AgentSettings, enforce_no_langsmith, get_settings
-from polytrade_agent.model import MODEL_ID, REASONING_EFFORT, build_model
+from polytrade_agent.model import MODEL_ID, REASONING_EFFORT, build_hermes_model, build_model
+
+
+def make_settings(**overrides: object) -> AgentSettings:
+    return AgentSettings.model_validate({**get_settings().model_dump(), **overrides})
 
 
 def test_model_is_fixed_to_maximum_reasoning() -> None:
@@ -65,6 +69,48 @@ def test_assethero_api_trust_is_optional_but_requires_a_complete_pair() -> None:
                 "ASSETHERO_API_JWKS_URL": None,
             }
         )
+
+
+def test_hermes_model_is_a_plain_streaming_openai_client() -> None:
+    settings = make_settings(
+        HERMES_API_URL="http://hermes.test:8642/v1",
+        HERMES_API_SERVER_KEY="sidecar-shared-secret",
+        HERMES_API_MODEL="hermes-agent",
+        HERMES_API_TIMEOUT_SECONDS=90,
+    )
+    model = build_hermes_model(settings)
+
+    assert model.model_name == "hermes-agent"
+    assert model.openai_api_base == "http://hermes.test:8642/v1"
+    assert model.openai_api_key.get_secret_value() == "sidecar-shared-secret"
+    assert model.streaming is True
+    assert model.stream_usage is True
+    assert model.max_retries == 1
+
+
+def test_hermes_model_requires_a_complete_configuration() -> None:
+    with pytest.raises(RuntimeError, match="Hermes runtime is not configured"):
+        build_hermes_model(get_settings())
+
+
+def test_hermes_model_resolves_the_openai_harness_profile() -> None:
+    from deepagents._models import get_model_provider
+    from deepagents.profiles.harness.harness_profiles import _harness_profile_for_model
+
+    from polytrade_agent.graph import HIDDEN_DEEP_AGENT_TOOLS
+
+    settings = make_settings(
+        HERMES_API_URL="http://hermes.test:8642/v1",
+        HERMES_API_SERVER_KEY="sidecar-shared-secret",
+    )
+    model = build_hermes_model(settings)
+
+    # ChatOpenAI reports provider "openai", which is the registry key the
+    # Hermes profile is registered under in polytrade_agent.graph.
+    assert get_model_provider(model) == "openai"
+    profile = _harness_profile_for_model(model, None)
+    assert HIDDEN_DEEP_AGENT_TOOLS.issubset(profile.excluded_tools)
+    assert profile.general_purpose_subagent.enabled is False
 
 
 def test_reasoning_content_round_trips_after_tool_call() -> None:

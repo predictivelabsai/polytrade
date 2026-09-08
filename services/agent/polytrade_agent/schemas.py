@@ -152,6 +152,36 @@ class ThreadListResponse(ContractModel):
 
 class AgentRunRequest(ContractModel):
     message: str = Field(min_length=1, max_length=32_000)
+    runtime: Literal["deepseek", "hermes"] = "deepseek"
+
+
+class AgentUsageResponse(ContractModel):
+    funding_source: Literal["platform"] = "platform"
+    used: int = Field(ge=0)
+    limit: int = Field(ge=0)
+    remaining: int = Field(ge=0)
+    cost_usd: DecimalString = "0"
+    platform_cost_usd: DecimalString = "0"
+    platform_budget_usd: DecimalString = "0"
+
+
+class AdminUsageRow(ContractModel):
+    runtime: Literal["deepseek", "hermes"]
+    calls: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    estimated_cost_usd: DecimalString = "0"
+
+
+class AdminPrincipalUsageRow(ContractModel):
+    principal_id: str = Field(min_length=1, max_length=200)
+    queries_used: int = Field(ge=0)
+    estimated_cost_usd: DecimalString = "0"
+
+
+class AdminUsageResponse(ContractModel):
+    usage_date: datetime
+    by_runtime: list[AdminUsageRow]
+    by_principal: list[AdminPrincipalUsageRow]
 
 
 class PublicMessage(ContractModel):

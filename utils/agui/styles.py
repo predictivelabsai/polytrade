@@ -129,21 +129,24 @@ CHAT_UI_STYLES = """
 }
 
 /* Streaming indicator */
+.chat-working-label {
+  display: inline;
+  color: #94a3b8;
+}
+
 .chat-streaming::after {
-  content: '...';
-  display: inline-block;
-  overflow: hidden;
-  width: 1.5rem;
-  vertical-align: bottom;
-  animation: chat-typing 1.1s steps(4, end) infinite;
+  content: ' ...';
+  display: inline;
+  white-space: nowrap;
+  animation: chat-typing 1.1s ease-in-out infinite;
   color: #10b981;
   font-weight: bold;
-  letter-spacing: 0.15rem;
+  letter-spacing: 0.08rem;
 }
 
 @keyframes chat-typing {
-  0% { width: 0; }
-  100% { width: 1.5rem; }
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 
 /* === Input Form === */

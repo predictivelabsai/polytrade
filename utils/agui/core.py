@@ -574,6 +574,7 @@ class AGUIThread:
             Div(
                 Div(
                     Span("", id=content_id),
+                    Span("Working", cls="chat-working-label", id=f"working-{asst_mid}"),
                     Span("", cls="chat-streaming", id=f"streaming-{asst_mid}"),
                     cls="chat-message-content",
                 ),
@@ -598,6 +599,7 @@ class AGUIThread:
 
         full_response = ""
         failed = False
+        received_delta = False
         try:
             async for event in self._chat_service.stream_message(
                 user_id=self._user_id,
@@ -610,6 +612,14 @@ class AGUIThread:
                 if event.event == MESSAGE_DELTA:
                     token = event.data.get("delta", "")
                     if token:
+                        if not received_delta:
+                            received_delta = True
+                            await self.send(Span(
+                                id=f"working-{asst_mid}", hx_swap_oob="delete"
+                            ))
+                            await self.send(Span(
+                                id=f"streaming-{asst_mid}", hx_swap_oob="delete"
+                            ))
                         await self.send(Span(
                             token,
                             id=content_id,

@@ -130,15 +130,20 @@ CHAT_UI_STYLES = """
 
 /* Streaming indicator */
 .chat-streaming::after {
-  content: '_';
-  animation: chat-blink 0.6s step-end infinite;
+  content: '...';
+  display: inline-block;
+  overflow: hidden;
+  width: 1.5rem;
+  vertical-align: bottom;
+  animation: chat-typing 1.1s steps(4, end) infinite;
   color: #10b981;
   font-weight: bold;
+  letter-spacing: 0.15rem;
 }
 
-@keyframes chat-blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+@keyframes chat-typing {
+  0% { width: 0; }
+  100% { width: 1.5rem; }
 }
 
 /* === Input Form === */

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import io
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from .agent_factory import get_tool_registry
-from .errors import UnsafeCommand
+from .errors import CommandUnavailable, UnsafeCommand
 from .prompts import COMMAND_HELP
 
 
@@ -38,6 +39,8 @@ _AUTHENTICATED_COMMANDS = {
     "poly:papersell",
     "poly:paperportfolio",
 }
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -79,25 +82,33 @@ class CommandRouter:
         if first in {"exit", "q", "cls", "reset", "r"} or stripped == "..":
             return None
 
-        from components.command_processor import CommandProcessor
-        from rich.console import Console
-
-        processor = CommandProcessor(
-            get_tool_registry().command_agent,
-            user_id=user_id,
-        )
-        output = io.StringIO()
-        original_console = processor.console
-        processor.console = Console(
-            file=output,
-            force_terminal=False,
-            width=120,
-            no_color=True,
-        )
+        processor = None
+        original_console = None
         try:
+            from components.command_processor import CommandProcessor
+            from rich.console import Console
+
+            processor = CommandProcessor(
+                get_tool_registry().command_agent,
+                user_id=user_id,
+            )
+            output = io.StringIO()
+            original_console = processor.console
+            processor.console = Console(
+                file=output,
+                force_terminal=False,
+                width=120,
+                no_color=True,
+            )
             handled, agent_query = await processor.process_command(stripped)
+        except Exception as exc:
+            logger.exception("PolyTrade command %s failed", first)
+            raise CommandUnavailable(
+                f"The `{first}` command is temporarily unavailable. Please try again."
+            ) from exc
         finally:
-            processor.console = original_console
+            if processor is not None and original_console is not None:
+                processor.console = original_console
 
         if not handled and agent_query:
             return None

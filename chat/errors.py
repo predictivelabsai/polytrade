@@ -41,3 +41,11 @@ class PersistenceUnavailable(ChatError):
     code = "persistence_unavailable"
     status_code = 503
     retryable = True
+
+
+class CommandUnavailable(ChatError):
+    """A recognized PolyTrade command failed in its tool/backend."""
+
+    code = "command_unavailable"
+    status_code = 503
+    retryable = True

@@ -519,13 +519,22 @@ class AGUIThread:
 
         # Block double-submit
         await self._send_js(_GUARD_ENABLE_JS)
+        try:
+            # Hide welcome screen + clear suggestions
+            await self.send(Div(id="welcome-screen", style="display:none", hx_swap_oob="outerHTML"))
+            await self.set_suggestions([])
 
-        # Hide welcome screen + clear suggestions
-        await self.send(Div(id="welcome-screen", style="display:none", hx_swap_oob="outerHTML"))
-        await self.set_suggestions([])
-
-        # Commands and free-form questions both go through the shared backend.
-        await self._handle_ai_run(msg, session)
+            # Commands and free-form questions both go through the shared backend.
+            await self._handle_ai_run(msg, session)
+        finally:
+            # Network errors, cancelled streams, and rendering failures must never
+            # leave the composer permanently locked.
+            await self._send_js(
+                _GUARD_DISABLE_JS +
+                "var b=document.querySelector('.chat-input-button'),t=document.getElementById('chat-input');"
+                "if(b){b.disabled=false;b.classList.remove('sending')}"
+                "if(t){t.disabled=false;t.placeholder='Type a command or ask a question...'}"
+            )
 
     async def _handle_ai_run(self, msg: str, session):
         """Render transport-neutral ChatService events over the existing WebSocket."""
@@ -647,8 +656,8 @@ class AGUIThread:
                     full_response = event.data.get("message", {}).get("content", "")
                 elif event.event == RUN_FAILED:
                     failed = True
-                    full_response = (
-                        f"**Error:** {event.data.get('message', 'Chat run failed.')}"
+                    full_response = event.data.get(
+                        "message", "I couldn't complete that request. Please try again."
                     )
                     await self.send(Div(
                         Div(
@@ -666,7 +675,7 @@ class AGUIThread:
                     pass
         except Exception as e:
             failed = True
-            full_response = "**Error:** The chat request could not be completed."
+            full_response = "I couldn't complete that request. Please try again."
             await self.send(Div(
                 Div(
                     Span("Error", cls="trace-label"),
@@ -678,7 +687,7 @@ class AGUIThread:
             ))
 
         if not full_response:
-            full_response = "**Error:** The agent returned an empty response."
+            full_response = "The agent returned an empty response. Please try again."
             failed = True
 
         # Replace streamed text with the authoritative persisted final message.

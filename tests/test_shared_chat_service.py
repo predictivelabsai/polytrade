@@ -364,6 +364,51 @@ async def test_help_command_uses_shared_command_backend_without_calling_model():
 
 
 @pytest.mark.asyncio
+async def test_command_backend_failure_is_typed_and_retryable():
+    repository = MemoryChatRepository()
+
+    class BrokenCommands:
+        async def run(self, content, user_id):
+            from chat.errors import CommandUnavailable
+            raise CommandUnavailable(
+                "The `poly:weather` command is temporarily unavailable. Please try again."
+            )
+
+    service = ChatService(
+        repository=repository,
+        agent_factory=lambda: FakeAgent(),
+        command_router=BrokenCommands(),
+    )
+    thread = await service.create_thread(USER_A)
+    events = [event async for event in service.stream_message(
+        user_id=USER_A,
+        thread_id=thread["thread_id"],
+        content="/hermes poly:weather London",
+        idempotency_key=str(uuid4()),
+    )]
+
+    assert events[-1].event == RUN_FAILED
+    assert events[-1].data["code"] == "command_unavailable"
+    assert events[-1].data["retryable"] is True
+    assert "poly:weather" in events[-1].data["message"]
+
+
+@pytest.mark.asyncio
+async def test_command_router_hides_initialization_failure(monkeypatch):
+    def broken_registry():
+        raise RuntimeError("provider secret must not reach the browser")
+
+    monkeypatch.setattr("chat.commands.get_tool_registry", broken_registry)
+
+    with pytest.raises(Exception) as captured:
+        await CommandRouter().run("poly:weather London", USER_A)
+
+    assert captured.value.code == "command_unavailable"
+    assert captured.value.retryable is True
+    assert "provider secret" not in str(captured.value)
+
+
+@pytest.mark.asyncio
 async def test_safe_command_processor_cannot_initialize_wallet_client():
     processor = CommandProcessor(
         SimpleNamespace(tool_map={}, allow_real_trading=False),

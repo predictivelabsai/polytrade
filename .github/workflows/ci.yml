@@ -6,6 +6,15 @@ on:
     branches: [main]
 
 jobs:
+  contracts-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project packages/contracts --frozen
+      - run: uv run --project packages/contracts ruff check packages/contracts
+      - run: uv run --project packages/contracts pytest -q packages/contracts/tests
+
   typescript:
     runs-on: ubuntu-latest
     steps:

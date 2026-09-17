@@ -92,7 +92,6 @@ python app.py        # → http://localhost:5001
 | File | Purpose |
 |------|---------|
 | `static/css/styles.css` | Dark theme, bubble styles, animations |
-| `static/js/app.js` | Auto-scroll, textarea resize, copy-code |
 
 ---
 

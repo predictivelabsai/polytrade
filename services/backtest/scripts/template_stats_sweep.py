@@ -4,7 +4,7 @@ Runs each template's ``backtestHint.strategy`` engine (momentum / mean-reversion
 / breakout defaults) over resolved CLOB-v2 markets found through the same Gamma
 search the gateway uses, and aggregates the per-run metrics into the four
 numbers shown on the /templates cards. The numbers land in the committed
-contracts constant (``packages/contracts/src/index.ts``); refreshing them is a
+contracts constant (``packages/contracts/polytrade_contracts/templates.py``); refreshing them is a
 deliberate re-run:
 
     # 1. Pin the market set (commit the manifest it prints to)
@@ -60,8 +60,8 @@ class TemplateSeed:
     strategy: str
 
 
-# Mirrors strategyTemplates in packages/contracts/src/index.ts (this script
-# cannot import TypeScript). Keep the two in sync: id, suggestedSearchQuery,
+# Mirrors STRATEGY_TEMPLATES in packages/contracts/polytrade_contracts/templates.py.
+# Keep the two in sync: id, suggestedSearchQuery,
 # backtestHint.strategy.
 TEMPLATE_UNIVERSE: tuple[TemplateSeed, ...] = (
     TemplateSeed("base-rate-divergence", "fed decision", "mean_reversion_v1"),

@@ -241,7 +241,7 @@ def test_universe_document_round_trip(tmp_path: Path) -> None:
 
 def test_template_universe_matches_the_contracts_constant() -> None:
     # Guards against the Python-side mirror drifting from
-    # strategyTemplates in packages/contracts/src/index.ts.
+    # STRATEGY_TEMPLATES in packages/contracts/polytrade_contracts/templates.py.
     observed = [
         (seed.template_id, seed.search_query, seed.strategy) for seed in sweep.TEMPLATE_UNIVERSE
     ]

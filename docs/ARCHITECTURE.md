@@ -2,14 +2,14 @@
 
 ## Services and data ownership
 
-PolyTrade runs a React client, Fastify gateway, FastAPI agent, FastAPI backtest
+PolyTrade runs a FastHTML client, FastAPI gateway, FastAPI agent, FastAPI backtest
 control service, Redis, and Celery backtest workers. All persistent services use
 the same externally provisioned PostgreSQL database through the same
 `DATABASE_URL`; production Compose never provisions a database. The schemas
 `polytrade`, `polytrade_agent`, and `polytrade_backtest` are namespaces, not
 security boundaries; one application identity intentionally owns all three.
 
-The React client and optional AssetHero caller use one public API origin. The
+The FastHTML client and optional AssetHero caller use one public API origin. The
 gateway serves its native routes and forwards `/v1/agent` to the private agent
 service and `/v1/backtests` to the private backtest control service without
 changing paths or response contracts. Agent SSE bodies remain streaming. The
@@ -18,7 +18,7 @@ the forwarded bearer token and required scope.
 
 ## Authentication boundary
 
-PolyTrade's standalone React client always authenticates through PolyTrade's
+PolyTrade's standalone FastHTML client always authenticates through PolyTrade's
 Clerk instance. The APIs trust that Clerk issuer and can optionally trust a
 second issuer belonging to AssetHero, a separate application. AssetHero access
 is API-only: there is no AssetHero frontend mode or browser bridge in PolyTrade.

@@ -5,9 +5,9 @@
 Provision the remote PostgreSQL database before deploying the root Compose
 project as one always-on application. Assign HTTPS domains only to `web` and
 `gateway`; keep Redis, `agent`, `backtest-api`, and `backtest-worker` private.
-Set `VITE_API_URL` to the gateway's public HTTPS origin and list the exact
+Set `API_URL` to the gateway's public HTTPS origin and list the exact
 browser origins in `CORS_ORIGINS`. For the standard deployment, set
-`VITE_API_URL=https://api.polytrade.com` and
+`API_URL=https://api.polytrade.com` and
 `CORS_ORIGINS=https://app.polytrade.com`; no additional DNS names are required.
 
 The gateway preserves `/v1/agent` while forwarding it to `http://agent:8000`

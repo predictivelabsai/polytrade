@@ -86,8 +86,8 @@ uses the shared chat API.
 ```bash
 # Individual services
 python api/main.py       # port 4000
-python web_app.py        # port 4002
-python agui_app.py       # port 4003
+uv run --project apps/web uvicorn polytrade_web.app:app --port 8080
+uv run --project apps/gateway uvicorn polytrade_gateway.main:app --port 4000
 
 # All via Docker Compose
 docker-compose up --build

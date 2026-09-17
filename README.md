@@ -388,11 +388,11 @@ For issues, questions, or suggestions, please open an issue on GitHub.
 ## Paper-trading workspace
 
 The repository also contains the v4 paper-trading stack under `apps/`,
-`services/`, and `packages/`. It includes the React workspace, Fastify gateway,
+`services/`, and `packages/`. It includes the FastHTML workspace and Python gateway,
 isolated agent and backtest services, continuous paper strategies, track
-records, alerts, guarded real-order proposals, and shared TypeScript contracts.
+records, alerts, guarded real-order proposals, and shared Pydantic contracts.
 
-The existing root Docker Compose deployment remains unchanged so the live
+The existing root Docker Compose deployment keeps the live
 Hermes/DeepAgents chat, API, database migration, and user history continue to
 operate. See `docs/ARCHITECTURE.md`, `docs/OPERATIONS.md`, and
 `docs/SECURITY.md` before deploying the v4 services as a separate stack.

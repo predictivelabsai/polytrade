@@ -9,10 +9,11 @@ from uuid import uuid4
 
 import httpx
 from fasthtml.common import FastHTML, Link, Meta, RedirectResponse, Title
-from polytrade_contracts import PublicTrackRecord
+from polytrade_contracts import PublicTrackRecord, parse_backtest_config
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from .backtests import backtests_page, new_backtest_page
 from .config import WebSettings
 from .gateway_client import GatewayClient, GatewayResponseError, access_token
 from .paper import decode_market, market_search_results, paper_page
@@ -454,6 +455,189 @@ def create_app(
             except GatewayResponseError:
                 pass
         return RedirectResponse("/paper", status_code=303)
+
+    async def backtest_list(token: str) -> list[dict[str, Any]]:
+        payload = await gateway.get("/v1/backtests", token, params={"limit": 50})
+        return list(payload.get("items", []))
+
+    async def backtest_details(token: str, run_id: str | None):
+        if not run_id:
+            return None, None, [], None
+        envelope = await gateway.get(f"/v1/backtests/{quote(run_id, safe='')}", token)
+        series = await gateway.get(f"/v1/backtests/{quote(run_id, safe='')}/series", token)
+        trades = await gateway.get(
+            f"/v1/backtests/{quote(run_id, safe='')}/trades",
+            token,
+            params={"offset": 0, "limit": 50},
+        )
+        return envelope.get("run"), envelope, list(series.get("points", [])), trades
+
+    @app.get("/backtests")
+    async def backtests(request: Request):
+        token = access_token(request)
+        if not token:
+            return Title("Sign in · PolyTrade"), auth_required()
+        try:
+            runs = await backtest_list(token)
+            selected_id = request.query_params.get("runId") or (
+                str(runs[0]["runId"]) if runs else None
+            )
+            selected, envelope, series, trades = await backtest_details(token, selected_id)
+            return Title("Backtests · PolyTrade"), backtests_page(
+                runs, selected, envelope, series, trades
+            )
+        except GatewayResponseError as exc:
+            return Title("Backtests · PolyTrade"), backtests_page(
+                [], None, None, [], None, error=str(exc)
+            )
+
+    @app.get("/backtests/{run_id}")
+    async def backtest_run(run_id: str, request: Request):
+        if run_id == "new":
+            return await new_backtest(request)
+        token = access_token(request)
+        if not token:
+            return Title("Sign in · PolyTrade"), auth_required()
+        try:
+            runs = await backtest_list(token)
+            selected, envelope, series, trades = await backtest_details(token, run_id)
+            return Title("Backtest replay · PolyTrade"), backtests_page(
+                runs, selected, envelope, series, trades
+            )
+        except GatewayResponseError as exc:
+            return Title("Backtests · PolyTrade"), backtests_page(
+                [], None, None, [], None, error=str(exc)
+            )
+
+    @app.post("/backtests/{run_id}/cancel")
+    async def cancel_backtest(run_id: str, request: Request):
+        token = access_token(request)
+        if token:
+            try:
+                await gateway.post(
+                    f"/v1/backtests/{quote(run_id, safe='')}/cancel",
+                    token,
+                    idempotency_key=str(uuid4()),
+                )
+            except GatewayResponseError:
+                pass
+        return RedirectResponse(f"/backtests/{quote(run_id, safe='')}", status_code=303)
+
+    @app.post("/backtests/{run_id}/delete")
+    async def delete_backtest(run_id: str, request: Request):
+        token = access_token(request)
+        if token:
+            try:
+                await gateway.delete(f"/v1/backtests/{quote(run_id, safe='')}", token)
+            except GatewayResponseError:
+                pass
+        return RedirectResponse("/backtests", status_code=303)
+
+    @app.post("/backtests/duplicate")
+    async def duplicate_backtest(request: Request):
+        token = access_token(request)
+        if token:
+            form = await request.form()
+            market_id = str(form.get("market_id", ""))
+            # The selected run's exact configuration is re-used by the client
+            # page in later iterations; this route keeps the operation explicit.
+            if market_id:
+                try:
+                    await gateway.post(
+                        "/v1/backtests",
+                        token,
+                        json={"marketId": market_id, "config": {"strategy": "momentum_v1"}},
+                        idempotency_key=str(uuid4()),
+                    )
+                except GatewayResponseError:
+                    pass
+        return RedirectResponse("/backtests", status_code=303)
+
+    @app.get("/backtests/new")
+    async def new_backtest(request: Request):
+        token = access_token(request)
+        if not token:
+            return Title("Sign in · PolyTrade"), auth_required()
+        query = request.query_params.get("query", "")[:160]
+        selected = decode_market(request.query_params.get("market"))
+        strategy = request.query_params.get("strategy", "momentum_v1")
+        template_id = request.query_params.get("template") or None
+        results: list[dict[str, Any]] = []
+        error = None
+        if query:
+            try:
+                payload = await gateway.get(
+                    "/v1/research/markets",
+                    token,
+                    params={"query": query, "state": "resolved", "limit": 20},
+                )
+                results = [
+                    item
+                    for item in market_search_results(payload, include_closed=True)
+                    if set(str(value).upper() for value in item.get("outcomes", []))
+                    == {"YES", "NO"}
+                ]
+            except GatewayResponseError as exc:
+                error = str(exc)
+        return Title("New backtest · PolyTrade"), new_backtest_page(
+            results,
+            query=query,
+            selected=selected,
+            strategy=strategy,
+            template_id=template_id,
+            error=error,
+        )
+
+    @app.post("/backtests/new")
+    async def create_backtest(request: Request):
+        token = access_token(request)
+        if not token:
+            return RedirectResponse("/backtests/new", status_code=303)
+        form = await request.form()
+        market = decode_market(str(form.get("market", ""))) or {}
+        strategy = str(form.get("strategy", "momentum_v1"))
+        config: dict[str, Any] = {
+            "strategy": strategy,
+            "initialCapital": str(form.get("initialCapital", "10000")),
+            "positionSizePct": str(form.get("positionSizePct", "0.10")),
+            "takeProfit": str(form.get("takeProfit", "0.10")),
+            "stopLoss": str(form.get("stopLoss", "0.05")),
+            "maxHoldMinutes": int(str(form.get("maxHoldMinutes", "1440"))),
+            "cooldownMinutes": int(str(form.get("cooldownMinutes", "60"))),
+            "slippage": str(form.get("slippage", "0.01")),
+            "maxFillDelayMinutes": int(str(form.get("maxFillDelayMinutes", "5"))),
+        }
+        if strategy == "momentum_v1":
+            config.update(
+                momentumWindowMinutes=int(str(form.get("momentumWindowMinutes", "60"))),
+                momentumThreshold=str(form.get("momentumThreshold", "0.05")),
+            )
+        elif strategy == "mean_reversion_v1":
+            config.update(
+                reversionWindowMinutes=int(str(form.get("reversionWindowMinutes", "60"))),
+                reversionThreshold=str(form.get("reversionThreshold", "0.05")),
+            )
+        else:
+            config.update(
+                breakoutWindowMinutes=int(str(form.get("breakoutWindowMinutes", "240"))),
+                breakoutThreshold=str(form.get("breakoutThreshold", "0.02")),
+            )
+        try:
+            config = parse_backtest_config(config).model_dump(mode="json", by_alias=True)
+            created = await gateway.post(
+                "/v1/backtests",
+                token,
+                json={
+                    "marketId": market.get("conditionId") or market.get("id", ""),
+                    "config": config,
+                },
+                idempotency_key=str(uuid4()),
+            )
+            return RedirectResponse(f"/backtests/{created['run']['runId']}", status_code=303)
+        except (GatewayResponseError, ValueError) as exc:
+            return Title("New backtest · PolyTrade"), new_backtest_page(
+                [], selected=market, strategy=strategy, error=str(exc)
+            )
 
     return app
 

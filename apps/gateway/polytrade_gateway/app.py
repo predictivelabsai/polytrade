@@ -26,6 +26,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from polytrade_contracts import (
     AgentPredictionRecord,
     AgentPredictionRequest,
+    CancelRequest,
+    CreateIntentRequest,
+    OrderIntentResponse,
     PaperFill,
     PaperFillsResponse,
     PaperOrderRequest,
@@ -41,6 +44,7 @@ from polytrade_contracts import (
     PublicMarketDetail,
     PublicOrderBook,
     PublicPriceHistory,
+    SubmitIntentRequest,
     WalletChallengeRequest,
     WalletChallengeResponse,
     WalletSessionRequest,
@@ -121,6 +125,7 @@ class GatewayRuntime:
         self.sessions: dict[str, _WalletSession] = {}
         self.predictions: dict[str, list[AgentPredictionRecord]] = {}
         self.alerts: dict[str, list[dict[str, Any]]] = {}
+        self.intents: dict[str, dict[str, Any]] = {}
 
     def account(self, principal: Principal) -> _PaperAccount:
         return self.accounts.setdefault(principal.id, _PaperAccount())
@@ -418,6 +423,83 @@ def create_app(
     @app.get("/v1/trades")
     async def account_trades(_principal: Principal = Depends(auth("trade"))) -> list[Any]:
         return []
+
+    @app.post("/v1/order-intents", response_model=OrderIntentResponse)
+    async def order_intent_create(
+        body: CreateIntentRequest,
+        request: Request,
+        principal: Principal = Depends(auth("trade")),
+    ) -> OrderIntentResponse:
+        if not _current_session(runtime, principal.id):
+            raise validation("An active wallet session is required")
+        intent_id = uuid4()
+        expires = datetime.now(UTC) + timedelta(seconds=runtime.config.ORDER_INTENT_TTL_SECONDS)
+        proposal = body.proposal.model_dump(mode="json")
+        order_type = proposal["execution"]
+        typed_data = {
+            "domain": {"name": "Polymarket CTF Exchange", "version": "1", "chainId": 137},
+            "types": {"Order": [{"name": "salt", "type": "uint256"}]},
+            "primaryType": "Order",
+            "message": {
+                "salt": int(time.time_ns()),
+                "tokenId": proposal["tokenId"],
+                "price": proposal["price"],
+                "size": proposal["size"],
+            },
+        }
+        order = {
+            "tokenId": proposal["tokenId"],
+            "price": proposal.get("price", proposal.get("limitPrice")),
+            "size": proposal.get("size", proposal.get("amount")),
+            "side": proposal["side"],
+            "orderType": order_type,
+        }
+        runtime.intents[str(intent_id)] = {
+            "principal": principal.id,
+            "expires": expires,
+            "order": order,
+        }
+        return OrderIntentResponse(
+            intentId=intent_id,
+            expiresAt=_iso(expires),
+            orderType=order_type,
+            postOnly=bool(proposal.get("postOnly", False)),
+            typedData=typed_data,
+            order=order,
+        )
+
+    @app.post("/v1/order-intents/{intent_id}/submit")
+    async def order_intent_submit(
+        intent_id: UUID,
+        body: SubmitIntentRequest,
+        principal: Principal = Depends(auth("trade")),
+    ) -> Any:
+        intent = runtime.intents.get(str(intent_id))
+        if not intent or intent["principal"] != principal.id:
+            raise not_found("Order intent not found")
+        raise unavailable("Live order submission is unavailable in this gateway runtime")
+
+    @app.post("/v1/order-intents/batch")
+    async def order_intent_batch(
+        request: Request, principal: Principal = Depends(auth("trade"))
+    ) -> Any:
+        payload = await request.json()
+        if not isinstance(payload, dict) or not payload.get("proposals"):
+            raise validation("At least one order proposal is required")
+        raise unavailable("Batch order intents are unavailable in this gateway runtime")
+
+    @app.post("/v1/order-intents/batch/submit")
+    async def order_intent_batch_submit(principal: Principal = Depends(auth("trade"))) -> Any:
+        raise unavailable("Batch order submission is unavailable in this gateway runtime")
+
+    @app.post("/v1/cancellations")
+    async def cancellation_create(
+        body: CancelRequest,
+        principal: Principal = Depends(auth("trade")),
+    ) -> Any:
+        if not _current_session(runtime, principal.id):
+            raise validation("An active wallet session is required")
+        raise unavailable("Live order cancellation is unavailable in this gateway runtime")
 
     @app.post("/v1/agent/predictions", response_model=AgentPredictionRecord)
     async def record_prediction(

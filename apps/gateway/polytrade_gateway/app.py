@@ -50,6 +50,7 @@ from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
 from .auth import JwtVerifier, create_jwt_verifier
+from .bootstrap import bootstrap_schema
 from .cache import TtlCache
 from .config import GatewayConfig
 from .crypto import CredentialCipher
@@ -203,6 +204,11 @@ def create_app(
     async def shutdown() -> None:
         if client is None:
             await runtime.close()
+
+    @app.on_event("startup")
+    async def startup() -> None:
+        if runtime.config.NODE_ENV == "production":
+            await bootstrap_schema(runtime.config.DATABASE_URL)
 
     def auth(scope: Literal["research", "trade"]):
         async def dependency(request: Request) -> Principal:

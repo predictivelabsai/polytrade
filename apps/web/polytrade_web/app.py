@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse, Response
 
 from .config import WebSettings
 from .gateway_client import GatewayClient, GatewayResponseError, access_token
+from .paper import decode_market, market_search_results, paper_page
 from .templates_page import templates_page
 from .track_record import track_record_page, track_record_unavailable
 from .workspace import auth_required, chat_page, settings_page, trades_page
@@ -281,6 +282,178 @@ def create_app(
             except GatewayResponseError:
                 pass
         return RedirectResponse("/settings", status_code=303)
+
+    async def paper_context(
+        token: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, Any] | None]:
+        portfolio = fills = strategy = None
+        try:
+            portfolio = await gateway.get("/v1/paper/portfolio", token)
+        except GatewayResponseError:
+            pass
+        try:
+            fills = await gateway.get("/v1/paper/fills", token, params={"limit": 20, "offset": 0})
+        except GatewayResponseError:
+            pass
+        try:
+            strategy = await gateway.get("/v1/paper/strategy", token)
+        except GatewayResponseError:
+            pass
+        return portfolio, fills, strategy
+
+    @app.get("/paper")
+    async def paper(request: Request):
+        token = access_token(request)
+        if not token:
+            return Title("Sign in · PolyTrade"), auth_required()
+        query = request.query_params.get("query", "")[:160]
+        template_id = request.query_params.get("template") or None
+        selected = decode_market(request.query_params.get("market"))
+        selected_token = request.query_params.get("token_id", "")
+        side = request.query_params.get("side", "BUY")
+        shares = request.query_params.get("shares", "")
+        portfolio, fills, strategy = await paper_context(token)
+        results: list[dict[str, Any]] = []
+        error = None
+        if query:
+            try:
+                payload = await gateway.get(
+                    "/v1/research/markets",
+                    token,
+                    params={"query": query, "state": "active", "limit": 20},
+                )
+                results = market_search_results(payload)
+            except GatewayResponseError as exc:
+                error = str(exc)
+        if portfolio is None:
+            error = error or "The paper ledger could not be loaded."
+        return Title("Paper trading · PolyTrade"), paper_page(
+            portfolio,
+            fills,
+            strategy,
+            results,
+            query=query,
+            selected=selected,
+            selected_token=selected_token,
+            side=side if side in {"BUY", "SELL"} else "BUY",
+            shares=shares,
+            template_id=template_id,
+            error=error,
+        )
+
+    async def paper_action_page(
+        request: Request,
+        path: str,
+        *,
+        method: str = "POST",
+    ):
+        token = access_token(request)
+        if not token:
+            return Title("Sign in · PolyTrade"), auth_required()
+        form = await request.form()
+        selected = decode_market(str(form.get("market", "")))
+        selected_token = str(form.get("token_id", ""))
+        side = str(form.get("side", "BUY"))
+        shares = str(form.get("shares", ""))
+        template_id = str(form.get("template", "")) or None
+        try:
+            if method == "QUOTE":
+                quote_value = await gateway.post(
+                    "/v1/paper/quotes",
+                    token,
+                    json={
+                        "conditionId": (selected or {}).get("conditionId", ""),
+                        "tokenId": selected_token,
+                        "side": side,
+                        "shares": shares,
+                    },
+                )
+                portfolio, fills, strategy = await paper_context(token)
+                return Title("Paper trade preview · PolyTrade"), paper_page(
+                    portfolio,
+                    fills,
+                    strategy,
+                    [],
+                    selected=selected,
+                    selected_token=selected_token,
+                    side=side,
+                    shares=shares,
+                    quote=quote_value,
+                    template_id=template_id,
+                )
+            await gateway.post(
+                "/v1/paper/orders",
+                token,
+                json={
+                    "conditionId": (selected or {}).get("conditionId", ""),
+                    "tokenId": selected_token,
+                    "side": side,
+                    "shares": shares,
+                    "limitPrice": str(form.get("limit_price", "")),
+                },
+                idempotency_key=str(uuid4()),
+            )
+            return RedirectResponse("/paper", status_code=303)
+        except GatewayResponseError as exc:
+            portfolio, fills, strategy = await paper_context(token)
+            return Title("Paper trading · PolyTrade"), paper_page(
+                portfolio,
+                fills,
+                strategy,
+                [],
+                selected=selected,
+                selected_token=selected_token,
+                side=side,
+                shares=shares,
+                template_id=template_id,
+                error=str(exc),
+            )
+
+    @app.post("/paper/quote")
+    async def paper_quote(request: Request):
+        return await paper_action_page(request, "/v1/paper/quotes", method="QUOTE")
+
+    @app.post("/paper/order")
+    async def paper_order(request: Request):
+        return await paper_action_page(request, "/v1/paper/orders")
+
+    @app.post("/paper/strategy/start")
+    async def paper_strategy_start(request: Request):
+        token = access_token(request)
+        if not token:
+            return RedirectResponse("/paper", status_code=303)
+        form = await request.form()
+        market = decode_market(str(form.get("market", ""))) or {}
+        try:
+            await gateway.post(
+                "/v1/paper/strategy",
+                token,
+                json={
+                    "conditionId": market.get("conditionId", ""),
+                    "tokenId": str(form.get("token_id", "")),
+                    "entryPrice": str(form.get("entry_price", "")),
+                    "exitPrice": str(form.get("exit_price", "")),
+                    "sharesPerOrder": str(form.get("shares_per_order", "")),
+                    "maxPosition": str(form.get("max_position", "")),
+                    "intervalSeconds": int(str(form.get("interval_seconds", "15"))),
+                },
+                idempotency_key=str(uuid4()),
+            )
+        except (GatewayResponseError, ValueError):
+            pass
+        return RedirectResponse(
+            f"/paper?market={quote(str(form.get('market', '')))}", status_code=303
+        )
+
+    @app.post("/paper/strategy/stop")
+    async def paper_strategy_stop(request: Request):
+        token = access_token(request)
+        if token:
+            try:
+                await gateway.post("/v1/paper/strategy/stop", token)
+            except GatewayResponseError:
+                pass
+        return RedirectResponse("/paper", status_code=303)
 
     return app
 

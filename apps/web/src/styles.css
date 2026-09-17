@@ -259,6 +259,18 @@ p {
   width: 17px;
 }
 
+.mobile-nav-details {
+  display: none;
+}
+
+.mobile-nav-details > summary {
+  list-style: none;
+}
+
+.mobile-nav-details > summary::-webkit-details-marker {
+  display: none;
+}
+
 .button,
 .send-button,
 .new-chat-button {
@@ -4436,6 +4448,27 @@ th small {
     border-radius: 7px;
     background: var(--raised);
     box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
+  }
+
+  .app-header > .app-nav {
+    display: none;
+  }
+
+  .mobile-nav-details {
+    position: relative;
+    display: block;
+  }
+
+  .mobile-nav-details > .app-nav {
+    position: absolute;
+    z-index: 90;
+    top: calc(100% + 8px);
+    right: 0;
+    width: min(280px, calc(100vw - 24px));
+  }
+
+  .mobile-nav-details[open] > .app-nav {
+    display: flex;
   }
 
   .app-nav-open {

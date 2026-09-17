@@ -63,7 +63,11 @@ def decode_market(value: str | None) -> dict[str, Any] | None:
         return None
 
 
-def market_search_results(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+def market_search_results(
+    payload: dict[str, Any] | None,
+    *,
+    include_closed: bool = False,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
     for event in (payload or {}).get("events", []):
@@ -72,10 +76,10 @@ def market_search_results(payload: dict[str, Any] | None) -> list[dict[str, Any]
             if (
                 condition
                 and condition not in seen
-                and market.get("active")
-                and not market.get("closed")
-                and market.get("acceptingOrders")
-                and market.get("enableOrderBook")
+                and (include_closed or market.get("active"))
+                and (include_closed or not market.get("closed"))
+                and (include_closed or market.get("acceptingOrders"))
+                and (include_closed or market.get("enableOrderBook"))
             ):
                 seen.add(condition)
                 results.append(market)

@@ -15,6 +15,15 @@ jobs:
       - run: uv run --project packages/contracts ruff check packages/contracts
       - run: uv run --project packages/contracts pytest -q packages/contracts/tests
 
+  gateway-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project apps/gateway --frozen
+      - run: uv run --project apps/gateway ruff check apps/gateway/polytrade_gateway apps/gateway/tests_py
+      - run: uv run --project apps/gateway pytest -q apps/gateway/tests_py
+
   typescript:
     runs-on: ubuntu-latest
     steps:

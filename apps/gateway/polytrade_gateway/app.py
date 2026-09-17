@@ -262,12 +262,6 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": VERSION}
 
-    @app.api_route("/v1/agent/{path:path}", methods=["GET", "POST", "DELETE"])
-    async def agent_proxy(
-        request: Request, path: str, _principal: Principal = Depends(auth("research"))
-    ) -> Response:
-        return await proxy(request, runtime.config.AGENT_UPSTREAM_URL, f"v1/agent/{path}")
-
     @app.api_route("/v1/backtests/{path:path}", methods=["GET", "POST", "DELETE"])
     async def backtest_proxy(
         request: Request, path: str, _principal: Principal = Depends(auth("research"))
@@ -432,6 +426,12 @@ def create_app(
         )
         runtime.predictions.setdefault(principal.id, []).append(record)
         return record
+
+    @app.api_route("/v1/agent/{path:path}", methods=["GET", "POST", "DELETE"])
+    async def agent_proxy(
+        request: Request, path: str, _principal: Principal = Depends(auth("research"))
+    ) -> Response:
+        return await proxy(request, runtime.config.AGENT_UPSTREAM_URL, f"v1/agent/{path}")
 
     @app.get("/v1/paper/portfolio", response_model=PaperPortfolio)
     async def paper_portfolio(principal: Principal = Depends(auth("research"))) -> PaperPortfolio:

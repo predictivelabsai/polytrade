@@ -42,8 +42,17 @@ STEPS = (
     ),
 )
 
+TEMPLATE_GUIDANCE = {
+    "base-rate-divergence": "Liquid markets where prices move slowly",
+    "longshot-fade": "Favourites attracting speculative longshot money",
+    "ev-sniping": "Liquid markets with a deep order book",
+    "overreaction-fade": "Headline-driven selloffs likely to revert",
+    "resolution-grinder": "Near-certain favourites with deep liquidity",
+}
+
 
 def template_card(template: StrategyTemplate) -> Article:
+    guidance = TEMPLATE_GUIDANCE.get(template.id, "Markets that match the backtest assumptions")
     return Article(
         Div(
             H3(template.name),
@@ -51,6 +60,11 @@ def template_card(template: StrategyTemplate) -> Article:
             cls="template-card-heading",
         ),
         P(template.tagline, cls="template-card-tagline"),
+        P(
+            Span("Best for", cls="template-card-fit-label"),
+            guidance,
+            cls="template-card-fit",
+        ),
         P(template.description, cls="template-card-description"),
         Dl(
             Div(Dt("Return"), Dd(f"+{template.stats.returnPct}%")),
@@ -59,7 +73,11 @@ def template_card(template: StrategyTemplate) -> Article:
             Div(Dt("Max drawdown"), Dd(f"−{template.stats.maxDrawdownPct}%")),
             cls="template-card-stats",
         ),
-        P(Span("Evidence"), template.stats.basis, cls="template-card-basis"),
+        P(
+            Span("Evidence", cls="template-card-basis-label"),
+            f"{template.stats.basis} · not a forecast.",
+            cls="template-card-basis",
+        ),
         Div(
             A(
                 "Deploy to paper ",
@@ -68,12 +86,13 @@ def template_card(template: StrategyTemplate) -> Article:
                 cls="button button-primary",
             ),
             A(
-                "See the backtest setup",
+                "Review setup",
                 href=f"/backtests/new?template={template.id}",
                 cls="button button-quiet",
             ),
             cls="template-card-actions",
         ),
+        id=f"template-{template.id}",
         cls="template-card",
     )
 
@@ -88,9 +107,9 @@ def templates_page() -> Main:
                 "virtual-USDC paper account. No wallet, no real funds — every fill is simulated."
             ),
             A(
-                "Open the paper dashboard ",
+                "Browse strategy templates ",
                 icon("arrow-right"),
-                href="/paper",
+                href="#strategy-templates",
                 cls="button button-primary template-landing-cta",
             ),
             cls="template-landing-hero",
@@ -102,6 +121,12 @@ def templates_page() -> Main:
                     H2("Start from a proven template"),
                 ),
                 cls="template-grid-header",
+            ),
+            Div(
+                Span("New to paper trading?", cls="template-selection-note-label"),
+                " Resolution grinder has the lowest illustrative drawdown in this set. ",
+                A("Start there", href="#template-resolution-grinder"),
+                cls="template-selection-note",
             ),
             Div(*(template_card(item) for item in STRATEGY_TEMPLATES), cls="template-grid"),
             id="strategy-templates",

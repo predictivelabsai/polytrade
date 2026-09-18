@@ -44,6 +44,14 @@ from .formatting import date_time, money, price, signed_money, tone
 from .icons import icon
 from .workspace import page_title, shell
 
+TEMPLATE_GUIDANCE = {
+    "base-rate-divergence": "Liquid markets where prices move slowly",
+    "longshot-fade": "Favourites attracting speculative longshot money",
+    "ev-sniping": "Liquid markets with a deep order book",
+    "overreaction-fade": "Headline-driven selloffs likely to revert",
+    "resolution-grinder": "Near-certain favourites with deep liquidity",
+}
+
 FILL_PAGE_SIZE = 20
 
 
@@ -199,62 +207,74 @@ def paper_page(
     )
     position_table = Section(
         Header(Span("Portfolio", cls="eyebrow paper-eyebrow"), H2("Paper positions")),
-        Table(
-            Thead(
-                Tr(
-                    Th("Market / outcome"),
-                    Th("Shares", cls="num"),
-                    Th("Average", cls="num"),
-                    Th("Value", cls="num"),
-                    Th("P&L", cls="num"),
-                )
-            ),
-            Tbody(
-                *(
+        Div(
+            Table(
+                Thead(
                     Tr(
-                        Th(item.get("marketQuestion") or "—", Small(item.get("outcome") or "—")),
-                        Td(item.get("shares") or "—", cls="num"),
-                        Td(price(item.get("averageCost")), cls="num"),
-                        Td(money(item.get("liquidationValue")), cls="num"),
-                        Td(
-                            signed_money(item.get("unrealizedPnl")),
-                            cls=f"num {tone(item.get('unrealizedPnl'))}",
-                        ),
+                        Th("Market / outcome"),
+                        Th("Shares", cls="num"),
+                        Th("Average", cls="num"),
+                        Th("Value", cls="num"),
+                        Th("P&L", cls="num"),
                     )
-                    for item in position_items
-                )
-                if position_items
-                else Tr(Td("No paper positions yet.", colspan="5", cls="table-empty")),
+                ),
+                Tbody(
+                    *(
+                        Tr(
+                            Th(
+                                item.get("marketQuestion") or "—",
+                                Small(item.get("outcome") or "—"),
+                            ),
+                            Td(item.get("shares") or "—", cls="num"),
+                            Td(price(item.get("averageCost")), cls="num"),
+                            Td(money(item.get("liquidationValue")), cls="num"),
+                            Td(
+                                signed_money(item.get("unrealizedPnl")),
+                                cls=f"num {tone(item.get('unrealizedPnl'))}",
+                            ),
+                        )
+                        for item in position_items
+                    )
+                    if position_items
+                    else Tr(Td("No paper positions yet.", colspan="5", cls="table-empty")),
+                ),
             ),
+            cls="table-scroll",
         ),
         cls="paper-holdings-panel data-section",
     )
     fill_table = Section(
         Header(Span("Execution tape", cls="eyebrow paper-eyebrow"), H2("Recent fills")),
-        Table(
-            Thead(
-                Tr(
-                    Th("Market / outcome"),
-                    Th("Side"),
-                    Th("Shares", cls="num"),
-                    Th("Price", cls="num"),
-                    Th("Created"),
-                )
-            ),
-            Tbody(
-                *(
+        Div(
+            Table(
+                Thead(
                     Tr(
-                        Th(item.get("marketQuestion") or "—", Small(item.get("outcome") or "—")),
-                        Td(Span(item.get("kind") or "—", cls="status-pill")),
-                        Td(item.get("shares") or "—", cls="num"),
-                        Td(price(item.get("averagePrice")), cls="num"),
-                        Td(date_time(item["createdAt"]) if item.get("createdAt") else "—"),
+                        Th("Market / outcome"),
+                        Th("Side"),
+                        Th("Shares", cls="num"),
+                        Th("Price", cls="num"),
+                        Th("Created"),
                     )
-                    for item in fill_items
-                )
-                if fill_items
-                else Tr(Td("No simulated fills yet.", colspan="5", cls="table-empty")),
+                ),
+                Tbody(
+                    *(
+                        Tr(
+                            Th(
+                                item.get("marketQuestion") or "—",
+                                Small(item.get("outcome") or "—"),
+                            ),
+                            Td(Span(item.get("kind") or "—", cls="status-pill")),
+                            Td(item.get("shares") or "—", cls="num"),
+                            Td(price(item.get("averagePrice")), cls="num"),
+                            Td(date_time(item["createdAt"]) if item.get("createdAt") else "—"),
+                        )
+                        for item in fill_items
+                    )
+                    if fill_items
+                    else Tr(Td("No simulated fills yet.", colspan="5", cls="table-empty")),
+                ),
             ),
+            cls="table-scroll",
         ),
         P(
             f"Showing {len(fill_items)} of {(fills or {}).get('total', len(fill_items))} fills",
@@ -415,26 +435,44 @@ def template_grid(active_id: str | None, running: bool):
                     cls="template-card-heading",
                 ),
                 P(template.tagline, cls="template-card-tagline"),
+                P(
+                    Span("Best for", cls="template-card-fit-label"),
+                    TEMPLATE_GUIDANCE.get(
+                        template.id, "Markets that match the backtest assumptions"
+                    ),
+                    cls="template-card-fit",
+                ),
                 P(template.description, cls="template-card-description"),
-                Div(
-                    Div(Span("Return"), Strong(f"+{template.stats.returnPct}%")),
-                    Div(Span("Win rate"), Strong(f"{template.stats.winRatePct}%")),
-                    Div(Span("Trades"), Strong(str(template.stats.tradeCount))),
-                    Div(Span("Max drawdown"), Strong(f"−{template.stats.maxDrawdownPct}%")),
+                Dl(
+                    Div(Dt("Return"), Dd(f"+{template.stats.returnPct}%")),
+                    Div(Dt("Win rate"), Dd(f"{template.stats.winRatePct}%")),
+                    Div(Dt("Trades"), Dd(str(template.stats.tradeCount))),
+                    Div(Dt("Max drawdown"), Dd(f"−{template.stats.maxDrawdownPct}%")),
                     cls="template-card-stats",
                 ),
-                P(Span("Evidence"), template.stats.basis, cls="template-card-basis"),
+                P(
+                    Span("Evidence", cls="template-card-basis-label"),
+                    f"{template.stats.basis} · not a forecast.",
+                    cls="template-card-basis",
+                ),
                 A(
                     "Arm template ",
                     icon("arrow-right"),
                     href=f"/paper?template={template.id}",
                     cls="button button-primary",
                 ),
+                id=f"template-{template.id}",
                 cls=f"template-card {'template-card-active' if active_id == template.id else ''}",
             )
         )
     return Section(
         Header(Span("One-click strategies", cls="eyebrow"), H2("Start from a proven template")),
+        Div(
+            Span("New to paper trading?", cls="template-selection-note-label"),
+            " Resolution grinder has the lowest illustrative drawdown in this set. ",
+            A("Start there", href="#template-resolution-grinder"),
+            cls="template-selection-note",
+        ),
         Div(*cards, cls="template-grid"),
         cls="template-grid-section",
     )

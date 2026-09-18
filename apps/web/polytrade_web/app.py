@@ -30,8 +30,20 @@ def create_app(
     client: httpx.AsyncClient | None = None,
 ) -> FastHTML:
     config = settings or WebSettings()
-    http = client or httpx.AsyncClient(timeout=10, follow_redirects=False)
+    http = client or httpx.AsyncClient(
+        timeout=0.25 if config.AUTH_BYPASS else 10,
+        follow_redirects=False,
+    )
     gateway = GatewayClient(config.API_URL, http)
+
+    def request_token(request: Request) -> str | None:
+        token = access_token(request)
+        if token:
+            return token
+        if config.AUTH_BYPASS and request.url.hostname in {"localhost", "127.0.0.1"}:
+            return "local-preview-token"
+        return None
+
     app = FastHTML(
         hdrs=(
             Meta(charset="utf-8"),
@@ -118,7 +130,7 @@ def create_app(
     ) -> tuple[
         str | None, list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None, str | None
     ]:
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return None, [], [], None, None
         try:
@@ -165,7 +177,7 @@ def create_app(
         )
 
     async def submit_chat(request: Request, thread_id: str | None = None):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return RedirectResponse("/chat", status_code=303)
         form = await request.form()
@@ -209,7 +221,7 @@ def create_app(
 
     @app.post("/chat/{thread_id}/delete")
     async def delete_chat(thread_id: str, request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if token:
             try:
                 await gateway.delete(f"/v1/agent/threads/{quote(thread_id, safe='')}", token)
@@ -219,7 +231,7 @@ def create_app(
 
     @app.get("/trades")
     async def trades(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         session = None
@@ -234,7 +246,7 @@ def create_app(
 
     @app.post("/trades/cancel")
     async def cancel_trade(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return RedirectResponse("/trades", status_code=303)
         form = await request.form()
@@ -257,7 +269,7 @@ def create_app(
 
     @app.get("/settings")
     async def settings(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         session = None
@@ -275,7 +287,7 @@ def create_app(
 
     @app.post("/settings/wallet/disconnect")
     async def disconnect_wallet(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if token:
             try:
                 session = await gateway.get("/v1/wallet-sessions/current", token)
@@ -304,7 +316,7 @@ def create_app(
 
     @app.get("/paper")
     async def paper(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         query = request.query_params.get("query", "")[:160]
@@ -348,7 +360,7 @@ def create_app(
         *,
         method: str = "POST",
     ):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         form = await request.form()
@@ -420,7 +432,7 @@ def create_app(
 
     @app.post("/paper/strategy/start")
     async def paper_strategy_start(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return RedirectResponse("/paper", status_code=303)
         form = await request.form()
@@ -448,7 +460,7 @@ def create_app(
 
     @app.post("/paper/strategy/stop")
     async def paper_strategy_stop(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if token:
             try:
                 await gateway.post("/v1/paper/strategy/stop", token)
@@ -474,7 +486,7 @@ def create_app(
 
     @app.get("/backtests")
     async def backtests(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         try:
@@ -495,7 +507,7 @@ def create_app(
     async def backtest_run(run_id: str, request: Request):
         if run_id == "new":
             return await new_backtest(request)
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         try:
@@ -511,7 +523,7 @@ def create_app(
 
     @app.post("/backtests/{run_id}/cancel")
     async def cancel_backtest(run_id: str, request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if token:
             try:
                 await gateway.post(
@@ -525,7 +537,7 @@ def create_app(
 
     @app.post("/backtests/{run_id}/delete")
     async def delete_backtest(run_id: str, request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if token:
             try:
                 await gateway.delete(f"/v1/backtests/{quote(run_id, safe='')}", token)
@@ -535,7 +547,7 @@ def create_app(
 
     @app.post("/backtests/duplicate")
     async def duplicate_backtest(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if token:
             form = await request.form()
             market_id = str(form.get("market_id", ""))
@@ -555,7 +567,7 @@ def create_app(
 
     @app.get("/backtests/new")
     async def new_backtest(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return Title("Sign in · PolyTrade"), auth_required()
         query = request.query_params.get("query", "")[:160]
@@ -590,7 +602,7 @@ def create_app(
 
     @app.post("/backtests/new")
     async def create_backtest(request: Request):
-        token = access_token(request)
+        token = request_token(request)
         if not token:
             return RedirectResponse("/backtests/new", status_code=303)
         form = await request.form()

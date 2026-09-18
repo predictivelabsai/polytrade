@@ -114,3 +114,23 @@ def test_health_and_styles_are_served_without_node() -> None:
     assert styles.status_code == 200
     assert ".template-landing-hero" in styles.text
     assert "fonts.googleapis.com" in styles.text
+
+
+def test_local_auth_bypass_is_limited_to_loopback_preview() -> None:
+    async_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(500))
+    )
+    app = create_app(
+        WebSettings(
+            API_URL="https://api.polytrade.test",
+            PUBLIC_ORIGIN="https://polytrade.test",
+            AUTH_BYPASS=True,
+        ),
+        async_client,
+    )
+
+    local = TestClient(app, base_url="http://127.0.0.1:5173")
+    assert "Sign in required" not in local.get("/chat").text
+
+    remote = TestClient(app, base_url="https://polytrade.test")
+    assert "Sign in required" in remote.get("/chat").text

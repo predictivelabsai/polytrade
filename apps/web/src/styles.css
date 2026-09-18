@@ -229,6 +229,7 @@ p {
 
 .header-actions {
   height: 100%;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -239,9 +240,13 @@ p {
 }
 
 .profile-control {
+  min-width: 0;
   display: grid;
   place-items: center;
-  min-width: 32px;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-menu-button {
@@ -1143,7 +1148,6 @@ textarea::placeholder {
   display: block;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 180ms ease;
 }
 
 .summary-metrics {
@@ -2037,7 +2041,6 @@ th small {
   background:
     linear-gradient(115deg, rgba(96, 165, 250, 0.12), transparent 36%),
     var(--pane);
-  box-shadow: inset 3px 0 0 var(--paper-accent);
 }
 
 .paper-equity {
@@ -4130,10 +4133,7 @@ th small {
   padding: 24px;
   background:
     radial-gradient(circle at 50% 32%, rgba(52, 211, 153, 0.1), transparent 22rem),
-    linear-gradient(rgba(43, 75, 59, 0.13) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(43, 75, 59, 0.13) 1px, transparent 1px),
     var(--canvas);
-  background-size: auto, 32px 32px, 32px 32px, auto;
 }
 
 .sign-in-card {
@@ -4425,6 +4425,54 @@ th small {
     padding: 14px 24px;
     border-left: 0;
     border-top: 1px solid rgba(96, 165, 250, 0.16);
+  }
+}
+
+@media (max-width: 1024px) {
+  .app-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .app-header > .app-nav {
+    display: none;
+  }
+
+  .header-actions {
+    gap: 6px;
+  }
+
+  .header-settings {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--pane);
+  }
+
+  .header-settings span {
+    display: none;
+  }
+
+  .header-settings::after {
+    display: none;
+  }
+
+  .profile-control {
+    max-width: 7rem;
+    font-size: 0.78rem;
+  }
+
+  .mobile-nav-details {
+    position: relative;
+    display: block;
+  }
+
+  .mobile-menu-button {
+    display: grid;
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -5176,6 +5224,7 @@ th small {
 
 .template-grid-section {
   min-width: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -5201,6 +5250,8 @@ th small {
 }
 
 .template-grid {
+  min-width: 0;
+  width: 100%;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 14px;
@@ -5208,6 +5259,7 @@ th small {
 
 .template-card {
   min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -5218,6 +5270,7 @@ th small {
 }
 
 .template-card-heading {
+  min-width: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -5225,6 +5278,7 @@ th small {
 }
 
 .template-card-heading h3 {
+  min-width: 0;
   margin: 0;
   font-size: 1rem;
 }
@@ -5241,11 +5295,34 @@ th small {
 }
 
 .template-card-tagline {
+  min-width: 0;
   margin: 0;
   font-size: 0.9rem;
 }
 
+.template-card-fit {
+  min-width: 0;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.template-card-fit-label,
+.template-card-basis-label,
+.template-selection-note-label {
+  color: var(--accent);
+  font: 0.58rem var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.template-card-fit-label {
+  margin-right: 5px;
+}
+
 .template-card-description {
+  min-width: 0;
   margin: 0;
   font-size: 0.85rem;
   color: var(--muted);
@@ -5263,30 +5340,40 @@ th small {
 
 .template-card-stats div {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px;
   min-width: 0;
 }
 
 .template-card-stats dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--faint);
-  font: 0.58rem var(--mono);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font: 0.56rem/1.25 var(--mono);
 }
 
 .template-card-stats dd {
+  flex: 0 0 auto;
   margin: 0;
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: 0.72rem;
   font-weight: 600;
+  text-align: right;
 }
 
 .template-card-basis {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: 0.7rem;
+  line-height: 1.35;
   color: var(--muted);
+}
+
+.template-card-basis-label {
+  display: block;
+  margin-bottom: 2px;
 }
 
 .template-card-actions {
@@ -5294,6 +5381,11 @@ th small {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.template-card-actions .button,
+.template-landing-cta {
+  min-height: 44px;
 }
 
 .template-chip {
@@ -5319,9 +5411,15 @@ th small {
 }
 
 /* Public /templates landing page */
+.templates-page {
+  padding-top: 24px;
+}
+
 .template-landing-hero {
+  min-width: 0;
+  width: 100%;
   max-width: 720px;
-  padding: 44px 0 16px;
+  padding: 36px 0 8px;
 }
 
 .template-landing-hero h1 {
@@ -5331,6 +5429,7 @@ th small {
 }
 
 .template-landing-hero p {
+  max-width: 65ch;
   margin: 0 0 20px;
   color: var(--muted);
   font-size: 1.05rem;
@@ -5342,7 +5441,29 @@ th small {
 }
 
 .template-grid-landing {
-  margin-top: 36px;
+  margin-top: 28px;
+}
+
+.template-selection-note {
+  max-width: 60rem;
+  margin: -2px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--accent-wash, transparent);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.template-selection-note a {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.template-selection-note a:hover {
+  text-decoration: underline;
 }
 
 .template-grid-landing .template-card-description {
@@ -5384,6 +5505,7 @@ th small {
 }
 
 .template-landing-footer {
+  min-width: 0;
   margin-top: 44px;
   padding-top: 16px;
   border-top: 1px solid var(--border-soft);
@@ -5402,12 +5524,44 @@ th small {
 }
 
 @media (max-width: 700px) {
+  .templates-page {
+    padding-top: 20px;
+  }
+
+  .template-landing-hero {
+    padding-top: 18px;
+  }
+
+  .template-card-heading h3 {
+    overflow-wrap: anywhere;
+  }
+
   .template-grid {
     grid-template-columns: 1fr;
   }
 
   .template-landing-steps {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 430px) {
+  html,
+  body {
+    min-width: 0;
+  }
+
+  .template-landing-hero h1 {
+    max-width: 320px;
+    font-size: 1.75rem;
+  }
+
+  .template-card-stats {
+    gap: 8px 10px;
+  }
+
+  .template-card-stats dd {
+    font-size: 0.7rem;
   }
 }
 

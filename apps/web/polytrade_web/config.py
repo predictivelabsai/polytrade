@@ -12,6 +12,7 @@ class WebSettings(BaseSettings):
     model_config = SettingsConfigDict(
         extra="ignore",
         case_sensitive=True,
+        populate_by_name=True,
         env_file=(WEB_ROOT / ".env", WEB_ROOT / ".env.local"),
     )
 
@@ -19,5 +20,9 @@ class WebSettings(BaseSettings):
     PUBLIC_ORIGIN: str = Field(default="http://localhost:5173", min_length=1)
     AUTH_BYPASS: bool = Field(
         default=False,
-        validation_alias=AliasChoices("POLYTRADE_AUTH_BYPASS", "VITE_E2E_AUTH_BYPASS"),
+        validation_alias=AliasChoices(
+            "AUTH_BYPASS",
+            "POLYTRADE_AUTH_BYPASS",
+            "VITE_E2E_AUTH_BYPASS",
+        ),
     )

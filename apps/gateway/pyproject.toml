@@ -1,0 +1,45 @@
+[project]
+name = "polytrade-gateway"
+version = "4.0.0"
+description = "Python API gateway for PolyTrade"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "cryptography>=46.0.0,<47",
+  "fastapi>=0.133.1,<0.134",
+  "httpx>=0.28.1,<0.29",
+  "polytrade-contracts",
+  "psycopg[binary,pool]>=3.3.4,<4",
+  "pydantic-settings>=2.10.1,<3",
+  "PyJWT[crypto]>=2.10.1,<3",
+  "uvicorn[standard]>=0.51.0,<0.52",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.1,<9",
+  "pytest-asyncio>=1.1.0,<2",
+  "respx>=0.22.0,<0.23",
+  "ruff>=0.12.7,<0.13",
+]
+
+[tool.uv.sources]
+polytrade-contracts = { path = "../../packages/contracts", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["polytrade_gateway"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests_py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
+ignore = ["S101", "B008"]

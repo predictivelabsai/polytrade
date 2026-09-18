@@ -6,25 +6,32 @@ on:
     branches: [main]
 
 jobs:
-  typescript:
+  contracts-python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.32.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-        env:
-          VITE_API_URL: https://api.polytrade.test
-          VITE_CLERK_PUBLISHABLE_KEY: pk_test_polytrade
-      - run: pnpm audit --prod --audit-level high
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project packages/contracts --frozen
+      - run: uv run --project packages/contracts ruff check packages/contracts
+      - run: uv run --project packages/contracts pytest -q packages/contracts/tests
+
+  gateway-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project apps/gateway --frozen
+      - run: uv run --project apps/gateway ruff check apps/gateway/polytrade_gateway apps/gateway/tests_py
+      - run: uv run --project apps/gateway pytest -q apps/gateway/tests_py
+
+  web-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --project apps/web --frozen
+      - run: uv run --project apps/web ruff check apps/web/polytrade_web apps/web/tests_py
+      - run: uv run --project apps/web pytest -q apps/web/tests_py
 
   agent:
     runs-on: ubuntu-latest

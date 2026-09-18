@@ -21,7 +21,7 @@ click
 # ── Trading ───────────────────────────────────────────────────────────────
 py-clob-client
 
-# ── Web UIs (FastHTML: app.py, web_app.py, agui_app.py) ──────────────────
+# ── Legacy compatibility shells (the product UI is apps/web) ────────────
 python-fasthtml
 uvicorn
 starlette<0.45

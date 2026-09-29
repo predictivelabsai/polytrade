@@ -400,7 +400,7 @@ def test_backtest_capacity_guard_waits_for_a_new_user_turn_after_denial() -> Non
 
 def test_model_receives_only_the_explicit_tool_allowlist() -> None:
     model = CapturingDeepSeek(
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="test",
         reasoning_effort="max",
         extra_body={"thinking": {"type": "enabled"}},
@@ -435,7 +435,7 @@ def test_injected_text_cannot_change_fixed_gateway_routes() -> None:
 @pytest.mark.asyncio
 async def test_gateway_bearer_is_taken_only_from_request_context() -> None:
     model = ToolCallingDeepSeek(
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="test",
         reasoning_effort="max",
         extra_body={"thinking": {"type": "enabled"}},
@@ -496,7 +496,7 @@ async def test_agent_forwards_only_the_selected_strategy_parameters(
     arguments: dict[str, Any], strategy_fields: dict[str, Any]
 ) -> None:
     model = BacktestCallingDeepSeek(
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="test",
         reasoning_effort="max",
         extra_body={"thinking": {"type": "enabled"}},
@@ -549,7 +549,7 @@ async def test_agent_forwards_only_the_selected_strategy_parameters(
 @pytest.mark.asyncio
 async def test_agent_can_queue_all_three_strategies_in_one_turn() -> None:
     model = BacktestCallingDeepSeek(
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="test",
         reasoning_effort="max",
         extra_body={"thinking": {"type": "enabled"}},
@@ -630,7 +630,7 @@ async def test_agent_can_queue_all_three_strategies_in_one_turn() -> None:
 @pytest.mark.asyncio
 async def test_resolved_search_and_backtest_forward_only_the_research_bearer() -> None:
     model = BacktestCallingDeepSeek(
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="test",
         reasoning_effort="max",
         extra_body={"thinking": {"type": "enabled"}},

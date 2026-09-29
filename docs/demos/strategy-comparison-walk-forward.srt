@@ -1,0 +1,27 @@
+1
+00:00:00,000 --> 00:00:10,000
+In Polytrade, describe a comparison in chat: three strategies, two take-profit values, and three holding limits. That creates eighteen combinations.
+
+2
+00:00:10,000 --> 00:00:19,000
+The agent queues a real background experiment. Open it to follow saved progress and access cancellation.
+
+3
+00:00:19,000 --> 00:00:31,000
+Rank candidates by return after costs, and inspect their exact settings. Here the leading breakout configuration still loses six point one four percent.
+
+4
+00:00:31,000 --> 00:00:39,000
+Ask for walk-forward validation in the same conversation. The full eighteen-combination grid is reused.
+
+5
+00:00:39,000 --> 00:00:47,000
+Five folds optimize on earlier training windows, then evaluate frozen settings on the next unseen window.
+
+6
+00:00:47,000 --> 00:00:57,000
+Only unseen test periods contribute to this equity curve. Returns, drawdown, trades, costs, and benchmarks remain visible.
+
+7
+00:00:57,000 --> 00:01:07,000
+Inspect each fold's dates and selected parameters. Positions close at the boundaries, while test cash carries forward. These are historical simulations.

@@ -162,6 +162,11 @@ def test_agent_exposes_only_polymarket_reads_backtests_and_unsigned_drafting() -
         "get_my_backtest",
         "record_prediction",
         "propose_trading_action",
+        "start_polymarket_experiment",
+        "list_my_experiments",
+        "get_my_experiment",
+        "walk_forward_my_experiment",
+        "cancel_my_experiment",
     }
     assert not names.intersection(
         {

@@ -40,6 +40,7 @@ export function BacktestsWorkspace(props: {
   onAskAgent: () => void;
   onError: (message: string) => void;
   onNewBacktest?: () => void;
+  onOpenExperiments?: () => void;
   onNotice: (message: string) => void;
   onSelectRun?: (runId: string) => void;
 }) {
@@ -308,6 +309,7 @@ export function BacktestsWorkspace(props: {
           <p>Evaluate strategy performance against one-minute Polymarket history with transparent execution assumptions and no wallet access.</p>
         </div>
         <div className="backtest-hero-actions">
+          {props.onOpenExperiments && <button className="button button-quiet" type="button" onClick={props.onOpenExperiments}>Experiments</button>}
           <button className="button button-quiet" type="button" onClick={() => void reloadList()}>
             <RefreshCw aria-hidden="true" /> Refresh runs
           </button>
@@ -524,8 +526,8 @@ function CompletedRun({ result, details, tradePage, onTradePage }: {
           <span className="eyebrow">Context, not a target</span>
           <h3>Buy-and-hold benchmarks</h3>
           <div><span>Strategy P&amp;L</span><strong className={Number(metrics.pnl) >= 0 ? "value-positive" : "value-negative"}>{money(metrics.pnl)}</strong></div>
-          <div><span>YES held to resolution</span><strong>{percent(metrics.yesBuyHoldReturnPct)}</strong></div>
-          <div><span>NO held to resolution</span><strong>{percent(metrics.noBuyHoldReturnPct)}</strong></div>
+          <div><span>YES buy-and-hold</span><strong>{percent(metrics.yesBuyHoldReturnPct)}</strong></div>
+          <div><span>NO buy-and-hold</span><strong>{percent(metrics.noBuyHoldReturnPct)}</strong></div>
           <div><span>Profit factor</span><strong>{metrics.profitFactor ? `${Number(metrics.profitFactor).toFixed(2)}×` : "—"}</strong></div>
           <div><span>Average holding time</span><strong>{duration(metrics.averageHoldingSeconds)}</strong></div>
           <div><span>Market exposure</span><strong>{percent(metrics.exposurePct)}</strong></div>
@@ -740,7 +742,7 @@ function progressCopy(value: BacktestRun["phase"]): string {
 }
 
 function reasonLabel(value: BacktestTrade["exitReason"]): string {
-  return ({ take_profit: "Take profit", stop_loss: "Stop loss", max_hold: "Maximum hold", settlement: "Resolution" })[value];
+  return ({ take_profit: "Take profit", stop_loss: "Stop loss", max_hold: "Maximum hold", settlement: "Resolution", window_end: "Window end" })[value];
 }
 
 function money(value: string): string {

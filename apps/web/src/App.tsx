@@ -39,6 +39,7 @@ import { AgentApiError, getAgentThreadItems, runAgentTurn } from "./agent";
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
 import { BacktestsWorkspace } from "./Backtests";
+import { ExperimentsWorkspace } from "./Experiments";
 import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
 import { DEFAULT_CASH_EXPOSURE_LIMIT, maximumExposure, orderRiskSummary, parseCashExposureLimit } from "./order";
@@ -63,7 +64,7 @@ interface PendingOrder {
 
 type FlowStage = "research" | "review" | "sign" | "live";
 type BusyAction = "agent" | "wallet" | "submit" | "account" | "cancel" | null;
-type Workspace = "trade" | "backtests";
+type Workspace = "trade" | "backtests" | "experiments";
 
 const STARTER_QUESTIONS = [
   "Backtest mean reversion on a resolved election market",
@@ -106,6 +107,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [flowStage, setFlowStage] = useState<FlowStage>("research");
   const [workspace, setWorkspace] = useState<Workspace>("trade");
+  const [focusedExperimentId, setFocusedExperimentId] = useState<string>();
   const [focusedBacktestId, setFocusedBacktestId] = useState<string>();
   const endRef = useRef<HTMLDivElement>(null);
   const initialThreadId = useRef(threadId);
@@ -136,7 +138,7 @@ export default function App() {
       const latestAction = [...items]
         .reverse()
         .find((item) => (
-          item.kind === "backtest"
+          item.kind === "backtest" || item.kind === "experiment"
           || (item.kind === "proposal" && Date.parse(item.expiresAt) > Date.now())
         ));
       if (latestAction?.kind === "proposal") {
@@ -145,6 +147,9 @@ export default function App() {
           expiresAt: latestAction.expiresAt,
         });
         setFlowStage("review");
+      } else if (latestAction?.kind === "experiment") {
+        setFocusedExperimentId(latestAction.experiment.experimentId);
+        setWorkspace("experiments");
       } else if (latestAction?.kind === "backtest") {
         setFocusedBacktestId(latestAction.backtest.runId);
         setWorkspace("backtests");
@@ -210,6 +215,10 @@ export default function App() {
             setPendingOrder(null);
             setReviewed(false);
             setFlowStage("review");
+          },
+          onExperiment: (reference) => {
+            setFocusedExperimentId(reference.experimentId);
+            setWorkspace("experiments");
           },
           onBacktest: (backtest) => {
             setFocusedBacktestId(backtest.runId);
@@ -485,10 +494,15 @@ export default function App() {
         </aside>
           </main>
         </>
+      ) : workspace === "experiments" ? (
+        <ExperimentsWorkspace client={backtests} focusedExperimentId={focusedExperimentId}
+          onSelect={setFocusedExperimentId} onShowRuns={() => setWorkspace("backtests")}
+          onAskAgent={() => setWorkspace("trade")} onError={setError} />
       ) : (
         <BacktestsWorkspace
           client={backtests}
           focusedRunId={focusedBacktestId}
+          onOpenExperiments={() => setWorkspace("experiments")}
           onAskAgent={() => {
             setWorkspace("trade");
             setQuestion((current) => current || "Backtest a strategy on a resolved binary Polymarket market");

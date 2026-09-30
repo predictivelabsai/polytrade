@@ -1,8 +1,5 @@
 # Strategy comparisons and walk-forward experiments
 
-[Watch the 67-second real app walkthrough](demos/strategy-comparison-walk-forward.mp4)
-or read the [recording notes](demos/README.md).
-
 Use the research chat to choose resolved binary Polymarket markets, then ask:
 
 > Compare momentum, mean reversion, and breakout on the selected markets.

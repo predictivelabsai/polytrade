@@ -11,6 +11,7 @@ from .config import get_settings
 from .context import AgentRunContext
 from .schemas import (
     BacktestRunReference,
+    ExperimentReference,
     PredictionInput,
     PredictionRecorded,
     TradingActionInput,
@@ -93,6 +94,13 @@ async def _backtest_request(
             json=payload,
             headers=headers,
         )
+        if response.is_error:
+            try:
+                detail = response.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            if isinstance(detail, str):
+                raise ValueError(detail)
         response.raise_for_status()
         return response.json()
 
@@ -171,7 +179,11 @@ async def get_polymarket_market(
     runtime: ToolRuntime[AgentRunContext],
     identifier_type: Literal["id", "slug"] = "slug",
 ) -> str:
-    """Get normalized Polymarket metadata for one market by ID or slug."""
+    """Get one market by slug, numeric Gamma ID, or 0x condition ID.
+
+    For a condition ID from a backtest or experiment, use identifier_type="id".
+    Both active and resolved markets are supported.
+    """
     return await _gateway_get(
         "/v1/research/market",
         runtime=runtime,
@@ -405,6 +417,184 @@ def propose_trading_action(proposal: Any) -> str:
     return envelope.model_dump_json(by_alias=True)
 
 
+def _experiment_reference(payload: Any) -> str:
+    run = payload["experiment"]
+    return ExperimentReference.model_validate(
+        {
+            "experimentId": run["experimentId"],
+            "mode": run["request"]["mode"],
+            "status": run["status"],
+            "marketIds": run["request"]["marketIds"],
+            "totalSimulations": run["totalSimulations"],
+            "completedSimulations": run["completedSimulations"],
+            "createdAt": run["createdAt"],
+        }
+    ).model_dump_json(by_alias=True)
+
+
+@tool
+async def start_polymarket_experiment(
+    market_ids: list[str],
+    runtime: ToolRuntime[AgentRunContext],
+    strategies: list[dict[str, Any]] | None = None,
+    periods: list[dict[str, Any]] | None = None,
+    initial_capital: str = "10000",
+    mode: Literal["grid", "walk_forward"] = "grid",
+    folds: int = 5,
+    train_minutes: int | None = None,
+    test_minutes: int | None = None,
+) -> str:
+    """Queue one managed strategy comparison or walk-forward experiment.
+
+    Search resolved markets and use only exact user-selected condition IDs.
+    Each strategy is {"baseConfig": {"strategy": "momentum_v1", ...},
+    "parameters": {"takeProfit": ["0.01", "0.015"], "maxHoldMinutes": [60, 120]}}.
+    Supported strategies: momentum_v1, mean_reversion_v1, breakout_v1.
+    Parameter names use camelCase from the single-run config; thresholds, TP/SL
+    and slippage are absolute token-price changes (not relative percentages).
+    Position size is a fraction. Omitted strategies compare all three defaults.
+    Periods use {"label": "3 months", "startAt": "ISO8601", "endAt": "ISO8601"};
+    omitted periods use available history. Never invent unavailable history.
+    Walk-forward defaults to rolling 50% training and five 10% test windows;
+    supply both train_minutes and test_minutes to override. Only training selects
+    parameters; test capital carries forward. Markets have independent capital.
+    The service validates the whole grid and a 1,000-simulation default budget,
+    queues one owner-scoped job, and checkpoints each simulation. Never split a
+    grid into single-run calls or claim it has started before this call succeeds.
+    """
+    payload = {
+        "marketIds": market_ids,
+        "initialCapital": initial_capital,
+        "mode": mode,
+        "strategies": strategies
+        if strategies is not None
+        else [
+            {"baseConfig": {"strategy": name}}
+            for name in ("momentum_v1", "mean_reversion_v1", "breakout_v1")
+        ],
+        "walkForward": {"folds": folds, "trainMinutes": train_minutes, "testMinutes": test_minutes},
+        **({"periods": periods} if periods is not None else {}),
+    }
+    result = await _backtest_request(
+        "/v1/backtests/experiments",
+        runtime=runtime,
+        method="POST",
+        payload=payload,
+        idempotency_key=f"agent:{getattr(runtime, 'tool_call_id', None) or uuid4()}",
+    )
+    return _experiment_reference(result)
+
+
+@tool
+async def list_my_experiments(runtime: ToolRuntime[AgentRunContext]) -> str:
+    """List owned grid and walk-forward experiments with compact progress summaries."""
+    payload = await _backtest_request(
+        "/v1/backtests/experiments",
+        runtime=runtime,
+        params={"limit": 20},
+    )
+    return _encoded_tool_result(
+        {
+            "items": [
+                {
+                    **{key: value for key, value in run.items() if key != "request"},
+                    "mode": run["request"]["mode"],
+                    "marketCount": len(run["request"]["marketIds"]),
+                }
+                for run in payload["items"]
+            ]
+        }
+    )
+
+
+@tool
+async def get_my_experiment(
+    experiment_id: str,
+    runtime: ToolRuntime[AgentRunContext],
+    market_offset: Annotated[int, Field(ge=0)] = 0,
+    candidate_offset: Annotated[int, Field(ge=0)] = 0,
+    fold_offset: Annotated[int, Field(ge=0)] = 0,
+) -> str:
+    """Read one market/period result with up to ten candidates and five folds.
+
+    Follow nextMarketOffset, nextCandidateOffset and nextFoldOffset until null
+    before claiming to have compared all requested results. Every returned
+    candidate/fold includes its exact evaluated configuration. Progress and
+    failures are also included. Curves and the complete original definition are
+    available in the Backtests experiment view. In-sample rankings are not
+    out-of-sample evidence or expected live returns.
+    """
+    # UUID parsing prevents path injection into the shared backtest client.
+    from uuid import UUID
+
+    payload = await _backtest_request(
+        f"/v1/backtests/experiments/{UUID(experiment_id)}",
+        runtime=runtime,
+    )
+    definition = payload["experiment"].pop("request")
+    grids = definition.pop("strategies", [])
+    definition["strategyNames"] = [grid["baseConfig"]["strategy"] for grid in grids]
+    payload["experiment"]["configurationSummary"] = definition
+    if payload.get("result"):
+        result = payload["result"]
+        markets = result["markets"]
+        result["marketCount"] = len(markets)
+        result["nextMarketOffset"] = market_offset + 1 if market_offset + 1 < len(markets) else None
+        result["markets"] = markets[market_offset : market_offset + 1]
+        for market in result["markets"]:
+            market.pop("series", None)
+            candidates = market["ranking"]
+            folds = market["folds"]
+            market["candidateCount"] = len(candidates)
+            market["foldCount"] = len(folds)
+            market["nextCandidateOffset"] = (
+                candidate_offset + 10 if candidate_offset + 10 < len(candidates) else None
+            )
+            market["nextFoldOffset"] = fold_offset + 5 if fold_offset + 5 < len(folds) else None
+            market["ranking"] = candidates[candidate_offset : candidate_offset + 10]
+            market["folds"] = folds[fold_offset : fold_offset + 5]
+    return _encoded_tool_result(payload)
+
+
+@tool
+async def walk_forward_my_experiment(
+    experiment_id: str,
+    runtime: ToolRuntime[AgentRunContext],
+    folds: int = 5,
+    train_minutes: int | None = None,
+    test_minutes: int | None = None,
+) -> str:
+    """Validate a previous experiment using its whole original grid, markets and periods.
+
+    The full-history winner is never used to choose settings for unseen windows.
+    This creates a new owned experiment and leaves the source result available.
+    """
+    from uuid import UUID
+
+    result = await _backtest_request(
+        f"/v1/backtests/experiments/{UUID(experiment_id)}/walk-forward",
+        runtime=runtime,
+        method="POST",
+        payload={"folds": folds, "trainMinutes": train_minutes, "testMinutes": test_minutes},
+        idempotency_key=f"agent:{getattr(runtime, 'tool_call_id', None) or uuid4()}",
+    )
+    return _experiment_reference(result)
+
+
+@tool
+async def cancel_my_experiment(experiment_id: str, runtime: ToolRuntime[AgentRunContext]) -> str:
+    """Cancel an owned experiment. Completed simulations remain checkpointed."""
+    from uuid import UUID
+
+    return _encoded_tool_result(
+        await _backtest_request(
+            f"/v1/backtests/experiments/{UUID(experiment_id)}/cancel",
+            runtime=runtime,
+            method="POST",
+        )
+    )
+
+
 POLYMARKET_TOOLS = [
     search_polymarket_markets,
     search_resolved_polymarket_markets,
@@ -418,4 +608,9 @@ POLYMARKET_TOOLS = [
     get_my_backtest,
     record_prediction,
     propose_trading_action,
+    start_polymarket_experiment,
+    list_my_experiments,
+    get_my_experiment,
+    walk_forward_my_experiment,
+    cancel_my_experiment,
 ]

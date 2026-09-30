@@ -828,8 +828,8 @@ const commonBacktestConfigShape = {
   cooldownMinutes: z.number().int().min(0).max(43_200).default(60),
   slippage: backtestDecimalString.default("0.01"),
   maxFillDelayMinutes: z.number().int().min(1).max(60).default(5),
-  startAt: z.string().datetime().nullable().optional(),
-  endAt: z.string().datetime().nullable().optional(),
+  startAt: z.string().datetime({ offset: true }).nullable().optional(),
+  endAt: z.string().datetime({ offset: true }).nullable().optional(),
 };
 
 type CommonBacktestConfig = {
@@ -988,7 +988,7 @@ export const backtestTradeSchema = z.object({
   entryFee: backtestDecimalString,
   exitFee: backtestDecimalString,
   pnl: signedBacktestDecimalString,
-  exitReason: z.enum(["take_profit", "stop_loss", "max_hold", "settlement"]),
+  exitReason: z.enum(["take_profit", "stop_loss", "max_hold", "settlement", "window_end"]),
 });
 
 export const backtestSeriesPointSchema = z.object({
@@ -1197,3 +1197,93 @@ export type AgentPredictionRecord = z.infer<typeof agentPredictionRecordSchema>;
 export type AgentPredictionCategory = z.infer<typeof agentPredictionCategorySchema>;
 export type AgentPredictionRecent = z.infer<typeof agentPredictionRecentSchema>;
 export type AgentPredictionHitRate = z.infer<typeof agentPredictionHitRateSchema>;
+
+// Managed comparisons share the deterministic single-run configuration and metrics.
+export const experimentPeriodSchema = z.object({
+  label: z.string().min(1).max(80).default("Available history"),
+  startAt: z.string().datetime({ offset: true }).nullable().optional(),
+  endAt: z.string().datetime({ offset: true }).nullable().optional(),
+}).strict().refine((value) => !value.startAt || !value.endAt || Date.parse(value.startAt) < Date.parse(value.endAt), "startAt must precede endAt");
+
+export const walkForwardConfigSchema = z.object({
+  folds: z.number().int().min(2).max(20).default(5),
+  trainMinutes: z.number().int().positive().nullable().optional(),
+  testMinutes: z.number().int().positive().nullable().optional(),
+}).strict().refine((value) => (value.trainMinutes == null) === (value.testMinutes == null), "Supply both trainMinutes and testMinutes");
+
+export const experimentStrategyGridSchema = z.object({
+  baseConfig: backtestConfigSchema.default(defaultMomentumBacktestConfig),
+  parameters: z.record(z.string(), z.array(z.union([z.string(), z.number().int()])).min(1).max(100)).default({}),
+}).strict().superRefine((value, ctx) => {
+  if (value.baseConfig.startAt || value.baseConfig.endAt) ctx.addIssue({ code: "custom", message: "Use experiment periods for dates" });
+  const base = value.baseConfig as unknown as Record<string, unknown>;
+  for (const [key, values] of Object.entries(value.parameters)) {
+    if (!(key in base) || ["strategy", "initialCapital", "startAt", "endAt"].includes(key)) {
+      ctx.addIssue({ code: "custom", path: ["parameters", key], message: "Unsupported grid parameter" });
+      continue;
+    }
+    for (const item of values) {
+      if (!backtestConfigSchema.safeParse({ ...base, [key]: item }).success) ctx.addIssue({ code: "custom", path: ["parameters", key], message: "Invalid parameter value" });
+    }
+  }
+});
+
+export const createExperimentRequestSchema = z.object({
+  marketIds: z.array(z.string().trim().min(1).max(200)).min(1).max(50),
+  strategies: z.array(experimentStrategyGridSchema).min(1).max(30),
+  initialCapital: backtestDecimalString.default("10000"),
+  periods: z.array(experimentPeriodSchema).min(1).max(12).default([{ label: "Available history" }]),
+  mode: z.enum(["grid", "walk_forward"]).default("grid"),
+  walkForward: walkForwardConfigSchema.default({ folds: 5 }),
+}).strict().superRefine((value, ctx) => {
+  if (Number(value.initialCapital) <= 0) ctx.addIssue({ code: "custom", path: ["initialCapital"], message: "Must be greater than zero" });
+  if (new Set(value.marketIds).size !== value.marketIds.length) ctx.addIssue({ code: "custom", path: ["marketIds"], message: "Markets must be unique" });
+  if (new Set(value.periods.map((period) => period.label)).size !== value.periods.length) ctx.addIssue({ code: "custom", path: ["periods"], message: "Period labels must be unique" });
+});
+
+export const experimentRunSchema = z.object({
+  experimentId: z.string().uuid(),
+  status: backtestStatusSchema,
+  request: createExperimentRequestSchema,
+  totalSimulations: z.number().int().positive(),
+  completedSimulations: z.number().int().nonnegative(),
+  message: z.string(),
+  failure: backtestFailureSchema.nullable().optional(),
+  createdAt: z.string().datetime({ offset: true }),
+  startedAt: z.string().datetime({ offset: true }).nullable().optional(),
+  completedAt: z.string().datetime({ offset: true }).nullable().optional(),
+});
+export const experimentCandidateSchema = z.object({
+  candidateId: z.string(), config: backtestConfigSchema, metrics: backtestMetricsSchema,
+});
+export const experimentFoldSchema = z.object({
+  fold: z.number().int().positive(),
+  trainStartAt: z.string().datetime({ offset: true }), trainEndAt: z.string().datetime({ offset: true }),
+  testStartAt: z.string().datetime({ offset: true }), testEndAt: z.string().datetime({ offset: true }),
+  selected: experimentCandidateSchema, testMetrics: backtestMetricsSchema,
+});
+export const marketExperimentResultSchema = z.object({
+  marketId: z.string(), marketQuestion: z.string(), datasetHash: z.string(), period: z.string(),
+  startAt: z.string().datetime({ offset: true }), endAt: z.string().datetime({ offset: true }),
+  ranking: z.array(experimentCandidateSchema), folds: z.array(experimentFoldSchema),
+  outOfSample: backtestMetricsSchema.nullable().optional(), series: z.array(backtestSeriesPointSchema),
+});
+export const experimentResultSchema = z.object({
+  markets: z.array(marketExperimentResultSchema), assumptions: z.array(z.string()),
+});
+export const experimentEnvelopeSchema = z.object({
+  experiment: experimentRunSchema, result: experimentResultSchema.nullable().optional(),
+});
+export const experimentListSchema = z.object({ items: z.array(experimentRunSchema) });
+export const experimentReferenceSchema = z.object({
+  kind: z.literal("experiment_run"), experimentId: z.string().uuid(),
+  mode: z.enum(["grid", "walk_forward"]), status: backtestStatusSchema,
+  marketIds: z.array(z.string()), totalSimulations: z.number().int().positive(),
+  completedSimulations: z.number().int().nonnegative(), createdAt: z.string().datetime({ offset: true }),
+});
+export type CreateExperimentRequest = z.infer<typeof createExperimentRequestSchema>;
+export type WalkForwardConfig = z.infer<typeof walkForwardConfigSchema>;
+export type ExperimentRun = z.infer<typeof experimentRunSchema>;
+export type ExperimentEnvelope = z.infer<typeof experimentEnvelopeSchema>;
+export type MarketExperimentResult = z.infer<typeof marketExperimentResultSchema>;
+export type ExperimentReference = z.infer<typeof experimentReferenceSchema>;

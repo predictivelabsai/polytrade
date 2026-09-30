@@ -63,6 +63,26 @@ Workers need outbound HTTPS only to the configured public Gamma and CLOB hosts,
 plus private PostgreSQL and Redis connectivity. Do not provide gateway wallet
 secrets, a CLOB API credential, a wallet key, or an order endpoint to a worker.
 
+## Experiment rollout and monitoring
+
+Deploy the gateway schema bootstrap first, then the backtest API and worker,
+then the agent and web client. The bootstrap adds experiment/checkpoint tables
+and permits the `window_end` trade exit reason. The backtest readiness check
+requires the new tables. Existing completed runs remain intact.
+
+`BACKTEST_MAX_EXPERIMENT_SIMULATIONS` defaults to 1,000 and must match on the
+backtest API and worker. The limit counts all markets, periods, grid candidates,
+and walk-forward training/test simulations before accepting work. Experiments
+share `BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER` with individual runs.
+
+Monitor experiment `completed_simulations`, `heartbeat_at`, `retries`, failure
+codes, and queued rows with old `published_at`. The outbox retries broker
+publication; stale running jobs are fenced and resumed from their checkpoints.
+Data failures and worker loss are bounded by `BACKTEST_MAX_RETRIES`. Back up the
+experiment and step tables with the existing immutable datasets. Never delete a
+dataset pinned by an experiment. A worker deployment should drain active jobs
+before changing simulation semantics.
+
 ## Readiness and backup
 
 - Gateway `/health` confirms database access after bootstrap.

@@ -1,4 +1,7 @@
 import {
+  experimentEnvelopeSchema, experimentListSchema, createExperimentRequestSchema,
+  walkForwardConfigSchema,
+  type ExperimentEnvelope, type ExperimentRun, type CreateExperimentRequest, type WalkForwardConfig,
   backtestRunEnvelopeSchema,
   backtestRunListSchema,
   backtestSeriesResponseSchema,
@@ -73,6 +76,31 @@ export class BacktestClient {
 
   async delete(runId: string): Promise<void> {
     await this.request(`/v1/backtests/${encodeURIComponent(runId)}`, { method: "DELETE" });
+  }
+
+  async listExperiments(): Promise<ExperimentRun[]> {
+    return experimentListSchema.parse(await this.request("/v1/backtests/experiments")).items;
+  }
+
+  async getExperiment(id: string): Promise<ExperimentEnvelope> {
+    return experimentEnvelopeSchema.parse(await this.request(`/v1/backtests/experiments/${encodeURIComponent(id)}`));
+  }
+
+  async createExperiment(input: CreateExperimentRequest, key: string = crypto.randomUUID()): Promise<ExperimentEnvelope> {
+    const body = createExperimentRequestSchema.parse(input);
+    return experimentEnvelopeSchema.parse(await this.request("/v1/backtests/experiments", {
+      method: "POST", body: JSON.stringify(body),
+    }, key));
+  }
+
+  async walkForwardExperiment(id: string, windows: WalkForwardConfig = { folds: 5 }, key: string = crypto.randomUUID()): Promise<ExperimentEnvelope> {
+    return experimentEnvelopeSchema.parse(await this.request(`/v1/backtests/experiments/${encodeURIComponent(id)}/walk-forward`, {
+      method: "POST", body: JSON.stringify(walkForwardConfigSchema.parse(windows)),
+    }, key));
+  }
+
+  async cancelExperiment(id: string): Promise<ExperimentEnvelope> {
+    return experimentEnvelopeSchema.parse(await this.request(`/v1/backtests/experiments/${encodeURIComponent(id)}/cancel`, { method: "POST" }));
   }
 
   private async request(

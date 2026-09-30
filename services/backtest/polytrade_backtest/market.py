@@ -92,7 +92,13 @@ class PolymarketHistoryClient:
         )
         try:
             snapshot = await self._fetch_market(client, condition_id)
-            start_at = max(snapshot.start_at, config.start_at or snapshot.start_at)
+            warmup = timedelta(
+                minutes=strategy_lookback_minutes(config) + config.max_fill_delay_minutes
+            )
+            start_at = max(
+                snapshot.start_at,
+                config.start_at - warmup if config.start_at else snapshot.start_at,
+            )
             end_at = min(snapshot.closed_at, config.end_at or snapshot.closed_at)
             if start_at >= end_at:
                 raise MarketDataError(
@@ -320,6 +326,17 @@ def validate_dataset_history(
                 "INSUFFICIENT_HISTORY",
                 f"{outcome} does not have enough one-minute history for this strategy",
             )
+
+
+def dataset_covers_warmup(dataset: HistoricalDataset, config: BacktestConfig) -> bool:
+    """A cache populated by a shorter lookback must not change a later strategy's signals."""
+    if config.start_at is None:
+        return True
+    required = max(
+        dataset.snapshot.start_at,
+        config.start_at - timedelta(minutes=strategy_lookback_minutes(config)),
+    )
+    return all(points and points[0].timestamp <= required for points in dataset.histories.values())
 
 
 async def _gather_fees(

@@ -103,6 +103,30 @@ post-exit cooldown. Positions left open settle at the binary $1/$0 resolution.
 The result includes strategy metrics, YES/NO buy-and-hold benchmarks, the exact
 configuration, assumptions, warnings, trades, and an equity/price replay series.
 
+## Managed experiments
+
+The agent queues parameter comparisons and walk-forward requests as one owned
+experiment under `/v1/backtests/experiments`. Each experiment shares the owner's
+active-job budget with single backtests, but its bounded candidate grid runs
+sequentially rather than consuming one slot per candidate. PostgreSQL stores the
+request, dispatch generation, claim token, pinned dataset hashes, progress,
+compressed simulation checkpoints, and final results.
+
+Each worker chunk performs at most ten new simulations or approximately two
+minutes of work between simulations, then yields through the PostgreSQL outbox.
+Retries replay the deterministic plan using saved checkpoints. A new claim token
+fences stale workers, and cancellation invalidates the token immediately.
+
+Windows are start-inclusive/end-exclusive. Earlier observations warm indicators
+without placing trades. Open positions at an intermediate boundary close at the
+last observed in-window price with fees and adverse slippage; future resolution
+cannot enter those results. Walk-forward selects the highest training net return
+(lower drawdown, then stable candidate ID break ties), freezes those settings for
+the next test window, and carries only test cash into the following test window.
+The reported out-of-sample curve and metrics contain no training results.
+
+See [experiments.md](experiments.md) for contracts, examples, and deployment.
+
 ## Real-order boundary
 
 The gateway remains the only process that can exchange wallet authority for L2

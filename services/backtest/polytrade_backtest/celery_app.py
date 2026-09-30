@@ -8,7 +8,7 @@ celery_app = Celery(
     "polytrade_backtest",
     broker=settings.REDIS_BROKER_URL.get_secret_value(),
     backend=settings.REDIS_RESULT_URL.get_secret_value(),
-    include=["polytrade_backtest.tasks"],
+    include=["polytrade_backtest.tasks", "polytrade_backtest.experiment_tasks"],
 )
 celery_app.conf.update(
     task_acks_late=True,

@@ -272,3 +272,11 @@ describe("runAgentTurn", () => {
     );
   });
 });
+
+it("renders typed experiment creation events", async () => {
+  const reference = { kind: "experiment_run", experimentId: BACKTEST_ID, mode: "grid", status: "queued", marketIds: ["market"], totalSimulations: 18, completedSimulations: 0, createdAt: "2026-05-01T00:00:00Z" };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(`event: experiment.created\ndata: ${JSON.stringify({ experimentId: "tool-call-1", experiment: reference })}\n\nevent: run.completed\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } })));
+  const onExperiment = vi.fn();
+  await runAgentTurn({ apiUrl: "https://api.polytrade.test", getToken: async () => "test", threadId: THREAD_ID, text: "Compare settings", handlers: { onThreadId: vi.fn(), onMessageStart: vi.fn(), onMessageText: vi.fn(), onProposal: vi.fn(), onExperiment } });
+  expect(onExperiment).toHaveBeenCalledWith(reference);
+});

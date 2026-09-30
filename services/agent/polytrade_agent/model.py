@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 
 from .config import AgentSettings
 
-MODEL_ID = "deepseek-v4-flash"
+MODEL_ID = "deepseek-flash"
 REASONING_EFFORT = "max"
 
 

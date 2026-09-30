@@ -403,9 +403,7 @@ async def test_stream_emits_only_public_typed_events(proposal_envelope) -> None:
 
 @pytest.mark.asyncio
 async def test_stream_emits_every_typed_backtest_created_event(proposal_envelope) -> None:
-    client, repository, _graph, _checkpointer = make_client(
-        proposal_envelope, backtest_count=3
-    )
+    client, repository, _graph, _checkpointer = make_client(proposal_envelope, backtest_count=3)
     async with client:
         response = await client.post(
             f"/v1/agent/threads/{repository.thread_id}/runs/stream",
@@ -915,3 +913,40 @@ async def test_activity_log_redacts_secrets_from_prompt_and_response(proposal_en
     assert completion["status"] == "completed"
     assert completion["response_text"] == "Current market answer"
     assert set(completion["metadata"]) == {"runtime", "requested_runtime", "fallback", "code"}
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_one_experiment_reference_for_duplicate_tool_updates(proposal_envelope):
+    client, repository, graph, _ = make_client(proposal_envelope)
+    original = graph.astream
+    reference = {
+        "kind": "experiment_run",
+        "experimentId": "11111111-1111-4111-8111-111111111111",
+        "mode": "grid",
+        "status": "queued",
+        "marketIds": ["condition"],
+        "totalSimulations": 18,
+        "completedSimulations": 0,
+        "createdAt": "2026-05-01T00:00:00Z",
+    }
+
+    async def with_experiment(input, **kwargs):
+        async for event in original(input, **kwargs):
+            yield event
+        message = ToolMessage(
+            name="start_polymarket_experiment",
+            tool_call_id="experiment-call",
+            content=json.dumps(reference),
+        )
+        yield "updates", {"tools": {"messages": [message, message]}}
+
+    graph.astream = with_experiment
+    async with client:
+        response = await client.post(
+            f"/v1/agent/threads/{repository.thread_id}/runs/stream",
+            json={"message": "Compare these settings"},
+        )
+    assert response.status_code == 200
+    assert response.text.count("event: experiment.created") == 1
+    assert '"totalSimulations":18' in response.text
+    assert "short-lived-browser-token" not in response.text

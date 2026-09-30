@@ -1,5 +1,7 @@
 import {
   tradingActionProposalSchema,
+  experimentReferenceSchema,
+  type ExperimentReference,
   type BacktestStrategy,
   type TradingActionProposal,
 } from "@polytrade/contracts";
@@ -21,6 +23,7 @@ export interface AgentTurnHandlers {
   onMessageStart: (messageId: string) => void;
   onMessageText: (messageId: string, text: string) => void;
   onProposal: (proposal: TradingActionProposal, expiresAt: string) => void;
+  onExperiment?: (experiment: ExperimentReference) => void;
   onBacktest?: (backtest: AgentBacktestReference) => void;
   onNotice?: (notice: { kind: "quota_warning" | "budget_warning" | "runtime_fallback"; message: string }) => void;
 }
@@ -57,7 +60,12 @@ export interface AgentThreadBacktest {
   backtest: AgentBacktestReference;
 }
 
-export type AgentThreadItem = AgentThreadMessage | AgentThreadProposal | AgentThreadBacktest;
+export interface AgentThreadExperiment {
+  kind: "experiment";
+  id: string;
+  experiment: ExperimentReference;
+}
+export type AgentThreadItem = AgentThreadMessage | AgentThreadProposal | AgentThreadBacktest | AgentThreadExperiment;
 
 export interface AgentThreadSummary {
   threadId: string;
@@ -108,6 +116,7 @@ const threadItemsSchema = z.object({
   threadId: z.string().uuid(),
   items: z.array(
     z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("experiment"), id: z.string(), experiment: experimentReferenceSchema }),
       z.object({
         kind: z.literal("message"),
         id: z.string(),
@@ -237,7 +246,7 @@ export async function getAgentThreadItems(
   );
   const payload = threadItemsSchema.parse(await response.json());
   return payload.items.map((item) => {
-    if (item.kind === "message" || item.kind === "backtest") return item;
+    if (item.kind === "message" || item.kind === "backtest" || item.kind === "experiment") return item;
     return {
           kind: "proposal" as const,
           id: item.id,
@@ -310,6 +319,11 @@ async function streamRun(options: {
       case "proposal.created": {
         const payload = proposalCreatedSchema.parse(event.data);
         options.handlers.onProposal(payload.envelope.proposal, payload.envelope.expiresAt);
+        break;
+      }
+      case "experiment.created": {
+        const payload = z.object({ experimentId: z.string(), experiment: experimentReferenceSchema }).parse(event.data);
+        options.handlers.onExperiment?.(payload.experiment);
         break;
       }
       case "backtest.created": {

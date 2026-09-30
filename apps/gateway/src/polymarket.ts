@@ -49,6 +49,12 @@ const gammaMarketMetadataSchema = z
   .passthrough();
 const gammaMarketsResponse = z.array(gammaMarketMetadataSchema);
 const feeRateResponse = z.object({ base_fee: z.number().int().nonnegative() });
+const priceHistoryResponse = z.object({
+  history: z.array(z.object({
+    t: z.number().int().nonnegative(),
+    p: z.number().min(0).max(1),
+  })),
+});
 const positionsResponse = z.array(objectRecord);
 const gammaEventTagsResponse = z
   .object({
@@ -254,6 +260,11 @@ export class PolymarketAdapter implements PolymarketPort {
   }
 
   async getMarket(identifier: string, kind: "id" | "slug"): Promise<unknown> {
+    // Chat and backtests use CLOB condition IDs; Gamma's /markets/:id route
+    // accepts its separate numeric market ID instead.
+    if (kind === "id" && /^0x[0-9a-fA-F]{64}$/.test(identifier)) {
+      return this.getMarketByCondition(identifier);
+    }
     const path = kind === "slug" ? `/markets/slug/${encodeURIComponent(identifier)}` : `/markets/${encodeURIComponent(identifier)}`;
     const raw = await this.fetchJson(
       new URL(path, this.config.POLYMARKET_GAMMA_URL),
@@ -284,9 +295,19 @@ export class PolymarketAdapter implements PolymarketPort {
     const url = new URL("/markets", this.config.POLYMARKET_GAMMA_URL);
     url.searchParams.set("condition_ids", conditionId);
     url.searchParams.set("limit", "2");
-    const matches = (await this.fetchJson(url, gammaMarketsResponse))
+    let matches = (await this.fetchJson(url, gammaMarketsResponse))
       .filter((market) => market.conditionId === conditionId);
-    if (matches.length === 0) throw validation("The paper market is not listed by Polymarket");
+    if (matches.length === 0) {
+      // Gamma excludes closed markets unless explicitly requested. Its keyset
+      // endpoint also retains resolved history needed by the backtester.
+      const resolvedUrl = new URL("/markets/keyset", this.config.POLYMARKET_GAMMA_URL);
+      resolvedUrl.searchParams.set("condition_ids", conditionId);
+      resolvedUrl.searchParams.set("closed", "true");
+      resolvedUrl.searchParams.set("limit", "2");
+      const resolved = await this.fetchJson(resolvedUrl, z.object({ markets: gammaMarketsResponse }));
+      matches = resolved.markets.filter((market) => market.conditionId === conditionId);
+    }
+    if (matches.length === 0) throw validation("The market is not listed by Polymarket");
     if (matches.length !== 1) throw unavailable("Polymarket returned ambiguous market metadata");
     const market = marketSearchMarketSchema.safeParse(normalizeMarket(matches[0]!));
     if (!market.success) throw unavailable("Polymarket returned malformed market metadata");
@@ -349,7 +370,10 @@ export class PolymarketAdapter implements PolymarketPort {
   }
 
   async getPriceHistory(tokenId: string, interval: string): Promise<unknown> {
-    const history = await this.publicClient.getPricesHistory({ market: tokenId, interval: interval as never });
+    const url = new URL("/prices-history", this.config.POLYMARKET_CLOB_URL);
+    url.searchParams.set("market", tokenId);
+    url.searchParams.set("interval", interval);
+    const { history } = await this.fetchJson(url, priceHistoryResponse);
     return {
       tokenId,
       interval,

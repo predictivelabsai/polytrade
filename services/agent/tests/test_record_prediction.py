@@ -115,7 +115,7 @@ def test_prediction_recorded_parses_the_gateway_response() -> None:
 @pytest.mark.asyncio
 async def test_record_prediction_forwards_bearer_idempotency_and_camel_case_body() -> None:
     model = PredictionCallingDeepSeek(
-        model="deepseek-v4-flash",
+        model="deepseek-flash",
         api_key="test",
         reasoning_effort="max",
         extra_body={"thinking": {"type": "enabled"}},

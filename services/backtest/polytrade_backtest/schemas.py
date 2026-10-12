@@ -205,7 +205,7 @@ class BacktestTrade(ContractModel):
     entry_fee: NonNegativeDecimalString
     exit_fee: NonNegativeDecimalString
     pnl: SignedDecimalString
-    exit_reason: Literal["take_profit", "stop_loss", "max_hold", "settlement"]
+    exit_reason: Literal["take_profit", "stop_loss", "max_hold", "settlement", "window_end"]
 
 
 class BacktestSeriesPoint(ContractModel):

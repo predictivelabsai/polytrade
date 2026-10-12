@@ -32,7 +32,9 @@ from .schemas import (
     AgentRunRequest,
     AgentUsageResponse,
     BacktestRunReference,
+    ExperimentReference,
     PublicBacktest,
+    PublicExperiment,
     PublicMessage,
     PublicProposal,
     PublicThreadItem,
@@ -504,6 +506,7 @@ async def _stream_agent_run(
             started_messages: set[str] = set()
             emitted_proposals: set[str] = set()
             emitted_backtests: set[str] = set()
+            emitted_experiments: set[str] = set()
             attempt_had_measured_usage = False
             try:
                 async with asyncio.timeout(services.settings.AGENT_RUN_TIMEOUT_SECONDS):
@@ -568,6 +571,24 @@ async def _stream_agent_run(
                                         {
                                             "backtestId": item_id,
                                             "backtest": backtest.model_dump(
+                                                mode="json", by_alias=True
+                                            ),
+                                        },
+                                    )
+                                elif tool_message.name in {
+                                    "start_polymarket_experiment",
+                                    "walk_forward_my_experiment",
+                                }:
+                                    experiment = _experiment_reference(tool_message.content)
+                                    if experiment is None or item_id in emitted_experiments:
+                                        continue
+                                    emitted_experiments.add(item_id)
+                                    emitted_any = True
+                                    yield _sse(
+                                        "experiment.created",
+                                        {
+                                            "experimentId": item_id,
+                                            "experiment": experiment.model_dump(
                                                 mode="json", by_alias=True
                                             ),
                                         },
@@ -691,9 +712,7 @@ async def _record_attempt_usage(
     try:
         for row_runtime, usage in observed_usage.values():
             provider = row_runtime
-            model_name = (
-                services.settings.HERMES_API_MODEL if row_runtime == "hermes" else MODEL_ID
-            )
+            model_name = services.settings.HERMES_API_MODEL if row_runtime == "hermes" else MODEL_ID
             await record_llm_usage(
                 services.storage.repository,
                 principal_id=principal_id,
@@ -708,9 +727,7 @@ async def _record_attempt_usage(
             )
         if not attempt_had_measured_usage:
             provider = runtime
-            model_name = (
-                services.settings.HERMES_API_MODEL if runtime == "hermes" else MODEL_ID
-            )
+            model_name = services.settings.HERMES_API_MODEL if runtime == "hermes" else MODEL_ID
             await record_llm_usage(
                 services.storage.repository,
                 principal_id=principal_id,
@@ -784,7 +801,13 @@ def _tool_messages(value: Any) -> Iterable[ToolMessage]:
     for message in _walk_messages(value):
         if (
             isinstance(message, ToolMessage)
-            and message.name in {"propose_trading_action", "start_polymarket_backtest"}
+            and message.name
+            in {
+                "propose_trading_action",
+                "start_polymarket_backtest",
+                "start_polymarket_experiment",
+                "walk_forward_my_experiment",
+            }
             and message.status == "success"
         ):
             yield message
@@ -804,6 +827,15 @@ def _backtest_reference(value: Any) -> BacktestRunReference | None:
         return None
     try:
         return BacktestRunReference.model_validate_json(value)
+    except ValueError:
+        return None
+
+
+def _experiment_reference(value: Any) -> ExperimentReference | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return ExperimentReference.model_validate_json(value)
     except ValueError:
         return None
 
@@ -844,6 +876,14 @@ def _public_thread_items(messages: Any) -> list[PublicThreadItem]:
                         PublicBacktest(
                             id=message.tool_call_id or identifier,
                             backtest=backtest,
+                        )
+                    )
+            elif message.name in {"start_polymarket_experiment", "walk_forward_my_experiment"}:
+                experiment = _experiment_reference(message.content)
+                if experiment is not None:
+                    items.append(
+                        PublicExperiment(
+                            id=message.tool_call_id or identifier, experiment=experiment
                         )
                     )
     return items

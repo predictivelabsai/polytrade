@@ -674,3 +674,55 @@ CREATE TABLE IF NOT EXISTS polytrade_backtest.backtest_series (
     point_count integer NOT NULL CHECK (point_count > 0),
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Window-bounded simulations close at observed prices instead of future settlement.
+ALTER TABLE polytrade_backtest.backtest_trades
+    DROP CONSTRAINT IF EXISTS backtest_trades_exit_reason_check;
+ALTER TABLE polytrade_backtest.backtest_trades
+    ADD CONSTRAINT backtest_trades_exit_reason_check CHECK (
+        exit_reason IN ('take_profit', 'stop_loss', 'max_hold', 'settlement', 'window_end')
+    );
+
+-- One experiment occupies one owner slot and executes its bounded grid sequentially.
+-- Dispatch metadata is an outbox on the parent row; the generation fences late publishes.
+CREATE TABLE IF NOT EXISTS polytrade_backtest.backtest_experiments (
+    experiment_id uuid PRIMARY KEY,
+    principal_id text NOT NULL,
+    request jsonb NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash char(64) NOT NULL,
+    status text NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+    total_simulations integer NOT NULL CHECK (total_simulations > 0),
+    completed_simulations integer NOT NULL DEFAULT 0
+        CHECK (completed_simulations >= 0 AND completed_simulations <= total_simulations),
+    message text NOT NULL DEFAULT 'Waiting for a worker',
+    dataset_hashes jsonb NOT NULL DEFAULT '{}',
+    result jsonb,
+    failure jsonb,
+    claim_token uuid,
+    dispatch_id uuid NOT NULL,
+    published_at timestamptz,
+    next_dispatch_at timestamptz NOT NULL DEFAULT now(),
+    retries integer NOT NULL DEFAULT 0,
+    heartbeat_at timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    completed_at timestamptz,
+    UNIQUE (principal_id, idempotency_key),
+    CHECK ((status IN ('queued', 'running') AND completed_at IS NULL)
+        OR (status IN ('completed', 'failed', 'cancelled') AND completed_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS backtest_experiments_owner_idx
+    ON polytrade_backtest.backtest_experiments (principal_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS backtest_experiments_dispatch_idx
+    ON polytrade_backtest.backtest_experiments (next_dispatch_at)
+    WHERE status = 'queued' AND published_at IS NULL;
+CREATE TABLE IF NOT EXISTS polytrade_backtest.backtest_experiment_steps (
+    experiment_id uuid NOT NULL REFERENCES polytrade_backtest.backtest_experiments(experiment_id)
+        ON DELETE CASCADE,
+    step_key text NOT NULL,
+    payload bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (experiment_id, step_key)
+);

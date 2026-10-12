@@ -54,7 +54,7 @@ try {
     database_name: row.database_name,
     gateway_tables: "16",
     agent_tables: "10",
-    backtest_tables: "8",
+    backtest_tables: "10",
     public_tables: "0",
     owned_schemas: "3",
     trigger_count: "1",

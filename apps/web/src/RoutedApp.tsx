@@ -56,6 +56,7 @@ import {
   tradingActionProposalSchema,
   type AccountOverview,
   type BacktestConfig,
+  type ExperimentReference,
   type BacktestStrategy,
   type CancellationSelector,
   type MarketSearchMarket,
@@ -91,6 +92,7 @@ import {
 import { useAuthentication } from "./auth";
 import { BacktestClient } from "./backtest";
 import { BacktestsWorkspace } from "./Backtests";
+import { ExperimentsWorkspace } from "./Experiments";
 import { AlertsSettings } from "./Alerts";
 import { checkBrowserEligibility, type Eligibility } from "./eligibility";
 import { env } from "./env";
@@ -113,6 +115,7 @@ interface ChatState {
   loadError?: string | null;
   proposalDraft: ProposalDraft | null;
   backtests: AgentBacktestReference[];
+  experiments: ExperimentReference[];
 }
 
 interface PendingOrder {
@@ -182,6 +185,7 @@ const emptyChat = (): ChatState => ({
   loading: false,
   proposalDraft: null,
   backtests: [],
+  experiments: [],
 });
 
 /**
@@ -431,6 +435,7 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
             ? { proposal: proposal.proposal, expiresAt: proposal.expiresAt }
             : null,
           backtests,
+          experiments: items.filter((item) => item.kind === "experiment").map((item) => item.experiment),
         },
       }));
       loadedThreadsRef.current.add(threadId);
@@ -565,6 +570,15 @@ function WorkspaceProvider({ children }: { children: ReactNode }) {
             setPendingOrders((current) => ({ ...current, [targetThreadId]: undefined }));
             setReviewedState((current) => ({ ...current, [targetThreadId]: false }));
             setLastProposalThreadId(targetThreadId);
+          },
+          onExperiment: (reference) => {
+            setChatStates((current) => {
+              const state = current[targetThreadId] ?? emptyChat();
+              const experiments = state.experiments.some((item) => item.experimentId === reference.experimentId)
+                ? state.experiments : [...state.experiments, reference];
+              return { ...current, [targetThreadId]: { ...state, experiments } };
+            });
+            setMessage("Experiment queued. Open it in activity or Backtests to follow progress.", "notice");
           },
           onBacktest: (backtestReference) => {
             setChatStates((current) => {
@@ -870,6 +884,8 @@ function ApplicationShell() {
         <Route path="/chat/:threadId" element={<ChatThreadPage />} />
         <Route path="/trades" element={<TradesPage />} />
         <Route path="/paper" element={<PaperPage />} />
+        <Route path="/backtests/experiments/:experimentId" element={<ExperimentsPage />} />
+        <Route path="/backtests/experiments" element={<ExperimentsPage />} />
         <Route path="/backtests/new" element={<NewBacktestPage />} />
         <Route path="/backtests/:runId" element={<BacktestsPage />} />
         <Route path="/backtests" element={<BacktestsPage />} />
@@ -1231,6 +1247,16 @@ const ActivityPane = function ActivityPane(props: {
             />
           </div>
         )}
+        {state.experiments.map((experiment) => (
+          <div className="activity-item" key={experiment.experimentId}>
+            <span className="tape-node" aria-hidden="true" />
+            <section className="activity-card">
+              <h3>{experiment.mode === "walk_forward" ? "Walk-forward validation" : "Strategy comparison"}</h3>
+              <p>{experiment.marketIds.length} markets · {experiment.totalSimulations} simulations</p>
+              <Link to={`/backtests/experiments/${experiment.experimentId}`}>Open experiment <ChevronRight /></Link>
+            </section>
+          </div>
+        ))}
         {runs.map((run) => (
           <div className="activity-item" key={run.runId}>
             <span className="tape-node" aria-hidden="true" />
@@ -1500,6 +1526,7 @@ function BacktestsPage() {
     <BacktestsWorkspace
       client={workspace.backtests}
       focusedRunId={runId}
+      onOpenExperiments={() => navigate("/backtests/experiments")}
       onSelectRun={onSelectRun}
       onNewBacktest={onNewBacktest}
       onAskAgent={onAskAgent}
@@ -1507,6 +1534,16 @@ function BacktestsPage() {
       onNotice={onNotice}
     />
   );
+}
+
+function ExperimentsPage() {
+  const { experimentId } = useParams();
+  const navigate = useNavigate();
+  const workspace = useWorkspace();
+  const onSelect = useCallback((id: string) => navigate(`/backtests/experiments/${id}`), [navigate]);
+  return <ExperimentsWorkspace client={workspace.backtests} focusedExperimentId={experimentId}
+    onSelect={onSelect} onShowRuns={() => navigate("/backtests")}
+    onAskAgent={() => navigate("/chat/new")} onError={workspace.setMessage} />;
 }
 
 interface CommonBacktestFormState {

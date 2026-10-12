@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthenticatedPrincipal, TokenVerifier
 from .celery_app import celery_app
 from .config import BacktestSettings, get_settings
+from .experiment_api import register_experiment_routes
+from .experiment_repository import ExperimentRepository
 from .repository import (
     ActiveRunLimitReached,
     BacktestNotFound,
@@ -33,8 +35,14 @@ logger = logging.getLogger("polytrade.backtest.api")
 
 
 class OutboxDispatcher:
-    def __init__(self, repository: BacktestRepository, settings: BacktestSettings) -> None:
+    def __init__(
+        self,
+        repository: BacktestRepository,
+        settings: BacktestSettings,
+        experiments: ExperimentRepository | None = None,
+    ) -> None:
         self.repository = repository
+        self.experiments = experiments
         self.settings = settings
         self._wake = asyncio.Event()
 
@@ -45,6 +53,10 @@ class OutboxDispatcher:
         while True:
             try:
                 await self.repository.recover_stale(self.settings.BACKTEST_STALE_SECONDS)
+                if self.experiments is not None:
+                    await self.experiments.recover_stale(
+                        self.settings.BACKTEST_STALE_SECONDS, self.settings.BACKTEST_MAX_RETRIES
+                    )
                 await self.dispatch_ready()
             except asyncio.CancelledError:
                 raise
@@ -71,6 +83,23 @@ class OutboxDispatcher:
             except Exception as exc:  # noqa: BLE001 - persisted for bounded retry
                 await self.repository.mark_publish_failed(run_id, type(exc).__name__)
 
+        if self.experiments is not None:
+            for item in await self.experiments.ready():
+                success = False
+                try:
+                    await asyncio.to_thread(
+                        celery_app.send_task,
+                        "polytrade_backtest.experiment",
+                        args=[str(item["experiment_id"])],
+                        task_id=str(item["dispatch_id"]),
+                    )
+                    success = True
+                except Exception as exc:  # noqa: BLE001 - durable outbox retries publication
+                    logger.error("experiment dispatch failed error_type=%s", type(exc).__name__)
+                await self.experiments.published(
+                    item["experiment_id"], item["dispatch_id"], success
+                )
+
 
 @dataclass
 class BacktestServices:
@@ -78,6 +107,7 @@ class BacktestServices:
     repository: BacktestRepository
     verifier: TokenVerifier
     dispatcher: OutboxDispatcher
+    experiments: ExperimentRepository | None = None
 
 
 @asynccontextmanager
@@ -88,12 +118,14 @@ async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
     try:
         if not await repository.schema_ready():
             raise RuntimeError("Backtest database schema is not ready")
-        dispatcher = OutboxDispatcher(repository, settings)
+        experiments = ExperimentRepository(repository)
+        dispatcher = OutboxDispatcher(repository, settings, experiments)
         application.state.services = BacktestServices(
             settings=settings,
             repository=repository,
             verifier=TokenVerifier(settings),
             dispatcher=dispatcher,
+            experiments=experiments,
         )
         dispatcher_task = asyncio.create_task(dispatcher.run())
         yield
@@ -140,6 +172,8 @@ def create_app(settings: BacktestSettings | None = None) -> FastAPI:
         if not ready:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "ready" if ready else "not_ready", "database": ready}
+
+    register_experiment_routes(application, get_services, require_principal, _idempotency_key)
 
     @application.post(
         "/v1/backtests",

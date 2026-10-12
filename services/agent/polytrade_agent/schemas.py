@@ -38,6 +38,7 @@ class ContractModel(BaseModel):
         serialize_by_alias=True,
     )
 
+
 DecimalString = Annotated[
     str,
     StringConstraints(pattern=r"^(0|[1-9]\d*)(\.\d{1,6})?$"),
@@ -53,7 +54,6 @@ PriceString = Annotated[
 
 
 class ProposalBase(ContractModel):
-
     token_id: Annotated[str, StringConstraints(pattern=r"^\d+$")]
     market_id: str = Field(min_length=1, max_length=200)
     market_question: str = Field(min_length=1, max_length=1_000)
@@ -89,20 +89,17 @@ class ImmediateOrderProposal(ProposalBase):
 
 
 class OrderCancellation(ContractModel):
-
     kind: Literal["order"]
     order_id: str = Field(min_length=1, max_length=200)
 
 
 class MarketCancellation(ContractModel):
-
     kind: Literal["market"]
     market_id: str = Field(min_length=1, max_length=200)
     token_id: Annotated[str, StringConstraints(pattern=r"^\d+$")] | None = None
 
 
 class AllCancellation(ContractModel):
-
     kind: Literal["all"]
 
 
@@ -113,7 +110,6 @@ CancellationSelector = Annotated[
 
 
 class CancellationProposal(ContractModel):
-
     action: Literal["cancel"] = "cancel"
     selector: CancellationSelector
     rationale: str = Field(default="", max_length=2_000)
@@ -204,9 +200,7 @@ class BacktestRunReference(ContractModel):
     market_question: str | None = None
     strategy: Literal["momentum_v1", "mean_reversion_v1", "breakout_v1"] = "momentum_v1"
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
-    phase: Literal[
-        "queued", "fetching", "simulating", "saving", "completed", "failed", "cancelled"
-    ]
+    phase: Literal["queued", "fetching", "simulating", "saving", "completed", "failed", "cancelled"]
     progress: int = Field(ge=0, le=100)
     created_at: datetime
 
@@ -217,8 +211,25 @@ class PublicBacktest(ContractModel):
     backtest: BacktestRunReference
 
 
+class ExperimentReference(ContractModel):
+    kind: Literal["experiment_run"] = "experiment_run"
+    experiment_id: UUID
+    mode: Literal["grid", "walk_forward"]
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
+    market_ids: list[str]
+    total_simulations: int = Field(ge=1)
+    completed_simulations: int = Field(ge=0)
+    created_at: datetime
+
+
+class PublicExperiment(ContractModel):
+    kind: Literal["experiment"] = "experiment"
+    id: str = Field(min_length=1, max_length=200)
+    experiment: ExperimentReference
+
+
 PublicThreadItem = Annotated[
-    PublicMessage | PublicProposal | PublicBacktest,
+    PublicMessage | PublicProposal | PublicBacktest | PublicExperiment,
     Field(discriminator="kind"),
 ]
 
@@ -235,7 +246,6 @@ ConfidenceString = Annotated[
 
 
 class PredictionInput(ContractModel):
-
     condition_id: str = Field(min_length=1, max_length=200)
     token_id: Annotated[str, StringConstraints(pattern=r"^\d+$")] | None = None
     market_question: str = Field(min_length=1, max_length=1_000)
@@ -244,7 +254,6 @@ class PredictionInput(ContractModel):
 
 
 class PredictionRecorded(ContractModel):
-
     prediction_id: UUID
     condition_id: str = Field(min_length=1, max_length=200)
     token_id: Annotated[str, StringConstraints(pattern=r"^\d+$")] | None = None

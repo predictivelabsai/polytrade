@@ -88,8 +88,18 @@ def run_backtest(
     fee_rate: Decimal,
     config: BacktestConfig,
     settlement_at: datetime | None = None,
+    benchmark_capital: Decimal | None = None,
 ) -> SimulationOutput:
-    normalized = {outcome: _normalize(points) for outcome, points in histories.items()}
+    # Keep prior observations for indicator warm-up, but never read beyond the
+    # exclusive evaluation boundary. Warm-up observations cannot create trades.
+    normalized = {
+        outcome: [
+            point
+            for point in _normalize(points)
+            if config.end_at is None or point.timestamp < config.end_at
+        ]
+        for outcome, points in histories.items()
+    }
     if not normalized.get("YES") or not normalized.get("NO"):
         raise ValueError("Both YES and NO price histories are required")
     if fee_rate < ZERO or fee_rate > ONE:
@@ -102,6 +112,12 @@ def run_backtest(
     timestamps = sorted(grouped)
     if len(timestamps) < 2:
         raise ValueError("At least two observations are required")
+    active_times = [t for t in timestamps if config.start_at is None or t >= config.start_at]
+    if len(active_times) < 2:
+        raise ValueError("At least two observations inside the evaluation window are required")
+    can_settle = config.end_at is None or (
+        settlement_at is not None and settlement_at < config.end_at
+    )
 
     initial_capital = Decimal(config.initial_capital)
     cash = initial_capital
@@ -116,7 +132,9 @@ def run_backtest(
     total_fees = ZERO
     held_seconds = Decimal("0")
     trades: list[BacktestTrade] = []
-    series: list[BacktestSeriesPoint] = []
+    series: list[BacktestSeriesPoint] = [
+        BacktestSeriesPoint(timestamp=active_times[0], equity=_decimal(initial_capital))
+    ]
     last_timestamp = timestamps[0]
 
     window = timedelta(minutes=strategy_lookback_minutes(config))
@@ -143,6 +161,9 @@ def run_backtest(
                 latest[outcome] = updates[outcome]
                 seen_times[outcome].append(timestamp)
                 seen_prices[outcome].append(updates[outcome])
+
+        if config.start_at is not None and timestamp < config.start_at:
+            continue
 
         if pending_exit is not None and position is not None and timestamp > pending_exit.signal_at:
             observed = updates.get(position.outcome)
@@ -234,7 +255,7 @@ def run_backtest(
     if pending_entry is not None and position is None:
         skipped_signals += 1
 
-    final_timestamp = settlement_at or timestamps[-1]
+    final_timestamp = (settlement_at or timestamps[-1]) if can_settle else timestamps[-1]
     if final_timestamp.tzinfo is None:
         final_timestamp = final_timestamp.replace(tzinfo=UTC)
     if final_timestamp < timestamps[-1]:
@@ -242,13 +263,17 @@ def run_backtest(
     if position is not None:
         if final_timestamp > last_timestamp:
             held_seconds += Decimal(str((final_timestamp - last_timestamp).total_seconds()))
-        settlement_price = ONE if position.outcome == resolved_outcome else ZERO
+        settlement_price = (
+            (ONE if position.outcome == resolved_outcome else ZERO)
+            if can_settle
+            else max(ZERO, latest[position.outcome] - slippage)
+        )
         cash, fee, trade = _close_position(
             position,
             final_timestamp,
             settlement_price,
-            ZERO,
-            "settlement",
+            ZERO if can_settle else fee_rate,
+            "settlement" if can_settle else "window_end",
             cash,
             len(trades),
         )
@@ -258,8 +283,12 @@ def run_backtest(
         series.append(
             BacktestSeriesPoint(
                 timestamp=final_timestamp,
-                yes_price="1" if resolved_outcome == "YES" else "0",
-                no_price="1" if resolved_outcome == "NO" else "0",
+                yes_price=("1" if resolved_outcome == "YES" else "0")
+                if can_settle
+                else _optional_decimal(latest.get("YES")),
+                no_price=("1" if resolved_outcome == "NO" else "0")
+                if can_settle
+                else _optional_decimal(latest.get("NO")),
                 equity=_decimal(cash),
             )
         )
@@ -267,21 +296,30 @@ def run_backtest(
     equities = [Decimal(point.equity) for point in series]
     final_equity = cash
     pnl = final_equity - initial_capital
-    duration_seconds = Decimal(str(max(1, (final_timestamp - timestamps[0]).total_seconds())))
+    duration_seconds = Decimal(str(max(1, (final_timestamp - active_times[0]).total_seconds())))
     wins = [Decimal(trade.pnl) for trade in trades if Decimal(trade.pnl) > ZERO]
     losses = [Decimal(trade.pnl) for trade in trades if Decimal(trade.pnl) < ZERO]
     holding = [Decimal(str((trade.exit_at - trade.entry_at).total_seconds())) for trade in trades]
-    yes_benchmark = _buy_hold_return(
-        initial_capital, normalized["YES"][0].price, resolved_outcome == "YES", fee_rate, slippage
-    )
-    no_benchmark = _buy_hold_return(
-        initial_capital, normalized["NO"][0].price, resolved_outcome == "NO", fee_rate, slippage
-    )
+    benchmarks = {}
+    for outcome in ("YES", "NO"):
+        active = [p for p in normalized[outcome] if p.timestamp >= active_times[0]]
+        if len(active) < 2:
+            raise ValueError(f"{outcome} has insufficient history inside the evaluation window")
+        benchmarks[outcome] = _buy_hold_return(
+            benchmark_capital or initial_capital or ONE,
+            active[0].price,
+            resolved_outcome == outcome,
+            fee_rate,
+            slippage,
+            end_price=None if can_settle else active[-1].price,
+        )
     metrics = BacktestMetrics(
         initial_capital=_decimal(initial_capital),
         final_equity=_decimal(final_equity),
         pnl=_decimal(pnl),
-        return_pct=_decimal(pnl / initial_capital * PERCENT),
+        # Public requests require positive capital. A WFO continuation can be
+        # bankrupt, in which case later folds remain in cash at zero.
+        return_pct=_decimal(pnl / initial_capital * PERCENT) if initial_capital else "0",
         max_drawdown_pct=_decimal(_max_drawdown(equities) * PERCENT),
         trade_count=len(trades),
         win_rate_pct=_decimal(Decimal(len(wins)) / Decimal(len(trades)) * PERCENT)
@@ -294,8 +332,8 @@ def run_backtest(
         exposure_pct=_decimal(min(ONE, held_seconds / duration_seconds) * PERCENT),
         fees=_decimal(total_fees),
         skipped_signals=skipped_signals,
-        yes_buy_hold_return_pct=_decimal(yes_benchmark),
-        no_buy_hold_return_pct=_decimal(no_benchmark),
+        yes_buy_hold_return_pct=_decimal(benchmarks["YES"]),
+        no_buy_hold_return_pct=_decimal(benchmarks["NO"]),
     )
     return SimulationOutput(metrics=metrics, trades=trades, series=series)
 
@@ -418,7 +456,7 @@ def _close_position(
     timestamp: datetime,
     price: Decimal,
     fee_rate: Decimal,
-    reason: Literal["take_profit", "stop_loss", "max_hold", "settlement"],
+    reason: Literal["take_profit", "stop_loss", "max_hold", "settlement", "window_end"],
     cash: Decimal,
     trade_index: int,
 ) -> tuple[Decimal, Decimal, BacktestTrade]:
@@ -448,6 +486,8 @@ def _buy_hold_return(
     winner: bool,
     fee_rate: Decimal,
     slippage: Decimal,
+    *,
+    end_price: Decimal | None = None,
 ) -> Decimal:
     price = min(ONE, observed_price + slippage)
     opened = _open_position(
@@ -456,7 +496,9 @@ def _buy_hold_return(
     if opened is None:
         return ZERO
     position, debit = opened
-    final = initial_capital - debit + position.shares * (ONE if winner else ZERO)
+    exit_price = (ONE if winner else ZERO) if end_price is None else max(ZERO, end_price - slippage)
+    exit_fee = ZERO if end_price is None else fee_for(position.shares, fee_rate, exit_price)
+    final = initial_capital - debit + position.shares * exit_price - exit_fee
     return (final - initial_capital) / initial_capital * PERCENT
 
 

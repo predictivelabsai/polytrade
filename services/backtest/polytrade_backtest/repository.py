@@ -105,6 +105,8 @@ class BacktestRepository:
                     AND to_regclass('polytrade_backtest.backtest_trades') IS NOT NULL
                     AND to_regclass('polytrade_backtest.backtest_metrics') IS NOT NULL
                     AND to_regclass('polytrade_backtest.backtest_series') IS NOT NULL
+                    AND to_regclass('polytrade_backtest.backtest_experiments') IS NOT NULL
+                    AND to_regclass('polytrade_backtest.backtest_experiment_steps') IS NOT NULL
                     AS exists
                 """
             )
@@ -136,10 +138,12 @@ class BacktestRepository:
                         return CreateRunResult(run=_run_from_row(existing), created=False)
                     cursor = await connection.execute(
                         """
-                        SELECT count(*) AS count FROM polytrade_backtest.backtest_runs
-                        WHERE principal_id = %s AND status IN ('queued', 'running')
+                        SELECT (SELECT count(*) FROM polytrade_backtest.backtest_runs
+                        WHERE principal_id = %s AND status IN ('queued', 'running')) +
+                        (SELECT count(*) FROM polytrade_backtest.backtest_experiments
+                        WHERE principal_id = %s AND status IN ('queued', 'running')) AS count
                         """,
-                        (principal_id,),
+                        (principal_id, principal_id),
                     )
                     active = await cursor.fetchone()
                     if active is None:
@@ -225,11 +229,12 @@ class BacktestRepository:
         async with self.pool.connection() as connection:
             cursor = await connection.execute(
                 """
-                SELECT count(*) AS count
-                FROM polytrade_backtest.backtest_runs
-                WHERE principal_id = %s AND status IN ('queued', 'running')
+                SELECT (SELECT count(*) FROM polytrade_backtest.backtest_runs
+                WHERE principal_id = %s AND status IN ('queued', 'running')) +
+                (SELECT count(*) FROM polytrade_backtest.backtest_experiments
+                WHERE principal_id = %s AND status IN ('queued', 'running')) AS count
                 """,
-                (principal_id,),
+                (principal_id, principal_id),
             )
             row = await cursor.fetchone()
             if row is None:

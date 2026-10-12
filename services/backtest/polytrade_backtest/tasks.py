@@ -10,7 +10,12 @@ from celery import Task
 from .celery_app import celery_app
 from .config import get_settings
 from .engine import run_backtest
-from .market import MarketDataError, PolymarketHistoryClient, validate_dataset_history
+from .market import (
+    MarketDataError,
+    PolymarketHistoryClient,
+    dataset_covers_warmup,
+    validate_dataset_history,
+)
 from .repository import BacktestRepository
 
 logger = logging.getLogger("polytrade.backtest.worker")
@@ -52,7 +57,7 @@ async def _execute(run_id: UUID) -> None:
         dataset = await repository.find_dataset(
             claim.market_id, claim.config.start_at, claim.config.end_at
         )
-        if dataset is None:
+        if dataset is None or not dataset_covers_warmup(dataset, claim.config):
             dataset = await PolymarketHistoryClient(settings).fetch_dataset(
                 claim.market_id, claim.config
             )
@@ -67,9 +72,7 @@ async def _execute(run_id: UUID) -> None:
             "mean_reversion_v1": "mean-reversion",
             "breakout_v1": "breakout",
         }[claim.config.strategy]
-        await repository.progress(
-            run_id, "simulating", 55, f"Replaying {strategy_name} strategy"
-        )
+        await repository.progress(run_id, "simulating", 55, f"Replaying {strategy_name} strategy")
         output = run_backtest(
             dataset.histories,
             resolved_outcome=dataset.snapshot.resolved_outcome,

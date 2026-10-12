@@ -33,6 +33,7 @@ class BacktestSettings(BaseSettings):
     BACKTEST_MAX_POINTS: int = Field(default=2_000_000, ge=10_000, le=5_000_000)
     BACKTEST_WORKER_CONCURRENCY: int = Field(default=2, ge=1, le=16)
     BACKTEST_MAX_ACTIVE_RUNS_PER_OWNER: int = Field(default=10, ge=3, le=50)
+    BACKTEST_MAX_EXPERIMENT_SIMULATIONS: int = Field(default=1_000, ge=1, le=10_000)
     BACKTEST_MAX_RETRIES: int = Field(default=5, ge=0, le=10)
     BACKTEST_SOFT_TIME_LIMIT_SECONDS: int = Field(default=840, ge=30, le=3_600)
     BACKTEST_HARD_TIME_LIMIT_SECONDS: int = Field(default=900, ge=60, le=3_900)

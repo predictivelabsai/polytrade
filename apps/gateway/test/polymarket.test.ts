@@ -29,6 +29,34 @@ function config() {
 }
 
 describe("PolymarketAdapter", () => {
+  it("unwraps and validates the CLOB price-history response", async () => {
+    let observedUrl = "";
+    const adapter = new PolymarketAdapter(config(), (async (input) => {
+      observedUrl = String(input);
+      return new Response(JSON.stringify({ history: [{ t: 1_790_000_000, p: 0.42 }] }), { status: 200 });
+    }) as typeof fetch);
+    await expect(adapter.getPriceHistory("123", "max")).resolves.toMatchObject({
+      tokenId: "123",
+      interval: "max",
+      points: [{ timestamp: 1_790_000_000, price: "0.42" }],
+    });
+    const url = new URL(observedUrl);
+    expect(url.pathname).toBe("/prices-history");
+    expect(url.searchParams.get("market")).toBe("123");
+    expect(url.searchParams.get("interval")).toBe("max");
+  });
+
+  it("preserves empty history and rejects malformed upstream history", async () => {
+    const adapter = (payload: unknown) => new PolymarketAdapter(config(),
+      (async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch);
+    await expect(adapter({ history: [] }).getPriceHistory("123", "1d"))
+      .resolves.toMatchObject({ points: [] });
+    await expect(adapter({ history: {} }).getPriceHistory("123", "1d"))
+      .rejects.toMatchObject({ statusCode: 503 });
+    await expect(adapter({ history: [{ t: 1, p: 2 }] }).getPriceHistory("123", "1d"))
+      .rejects.toMatchObject({ statusCode: 503 });
+  });
+
   it("retries public reads but validates their response shape", async () => {
     let calls = 0;
     const request = async () => {
@@ -193,6 +221,41 @@ describe("PolymarketAdapter", () => {
     expect(feeRate).toBe("0.040000");
     expect(observedUrls[0]?.searchParams.get("condition_ids")).toBe("0xcondition");
     expect(observedUrls[1]?.searchParams.get("token_id")).toBe("123");
+  });
+
+  it("resolves a backtest condition ID through closed-market history instead of the numeric-ID route", async () => {
+    const conditionId = `0x${"a".repeat(64)}`;
+    const observedUrls: URL[] = [];
+    const market = {
+      id: "4797487", conditionId, slug: "resolved-bitcoin", question: "Bitcoin in range?",
+      outcomes: ["Yes", "No"], outcomePrices: ["1", "0"], clobTokenIds: ["123", "456"],
+      active: true, closed: true, acceptingOrders: false, enableOrderBook: true,
+    };
+    const request = async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      observedUrls.push(url);
+      return new Response(JSON.stringify(url.pathname === "/markets" ? [] : { markets: [market] }), { status: 200 });
+    };
+    const adapter = new PolymarketAdapter(config(), request as typeof fetch);
+    await expect(adapter.getMarket(conditionId, "id")).resolves.toMatchObject({
+      market: { id: "4797487", conditionId, closed: true, outcomePrices: ["1", "0"] },
+    });
+    expect(observedUrls.map((url) => url.pathname)).toEqual(["/markets", "/markets/keyset"]);
+    expect(observedUrls[1]?.searchParams.get("closed")).toBe("true");
+    expect(observedUrls[1]?.searchParams.get("condition_ids")).toBe(conditionId);
+  });
+
+  it.each([
+    ["4797487", "id", "/markets/4797487"],
+    ["resolved-bitcoin", "slug", "/markets/slug/resolved-bitcoin"],
+  ] as const)("preserves %s metadata lookup", async (identifier, kind, path) => {
+    let requestedPath = "";
+    const request = async (input: string | URL | Request) => {
+      requestedPath = new URL(String(input)).pathname;
+      return new Response(JSON.stringify({ id: "4797487", conditionId: "condition", question: "Bitcoin?" }), { status: 200 });
+    };
+    await new PolymarketAdapter(config(), request as typeof fetch).getMarket(identifier, kind);
+    expect(requestedPath).toBe(path);
   });
 
   it("verifies the exact EIP-712 payload, wallet, and Polygon domain", async () => {

@@ -36,9 +36,11 @@ async def get_pool() -> asyncpg.Pool:
         if _pool is None or _pool.is_closing():
             _pool = await asyncpg.create_pool(
                 _get_dsn(),
-                min_size=2,
-                max_size=10,
+                min_size=1,
+                max_size=3,
+                max_inactive_connection_lifetime=300,
                 command_timeout=30,
+                server_settings={"application_name": os.getenv("DB_APPLICATION_NAME", "polytrade")},
                 init=_init_conn,
             )
         return _pool
